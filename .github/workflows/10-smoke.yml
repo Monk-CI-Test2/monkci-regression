@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH cpus=$(nproc) mem=$(free -m | awk '/Mem:/{print $2}')MB"
-          [[ "$RUNNER_NAME" == mig-* ]] || { echo "::error::runner name '$RUNNER_NAME' is not a MonkCI VM"; exit 1; }
+          [[ "$RUNNER_NAME" == monkci--* ]] || { echo "::error::runner name '$RUNNER_NAME' is not a MonkCI runner"; exit 1; }
           {
             echo "## Smoke"
             echo "- runner: \`$RUNNER_NAME\`"
