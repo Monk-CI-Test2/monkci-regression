@@ -15,9 +15,25 @@ on `ubuntu-latest` so they never consume pool capacity themselves.
 | `40-cancel-matrix.yml` | Mixed cancels while queued, cancels after start, failures and successes, then a clean probe that must get a runner within the SLO. Exercises cancelled completions, runner theft after late cancels, and pool health afterwards. | about 10 min |
 | `30-queue-pressure.yml` | More jobs than warm VMs, each holding its runner. Drives the receipt-timeout and recovery path through GitHub's FIFO assignment. Every job must run within the SLO. | 4 to 8 min |
 | `50-docker-cache-example.yml` | Writer seeds the per-repo docker cache, a reader on a fresh VM must hit it. The small example; the heavy matrices live in `docker-cache-test`. | 3 to 5 min |
-| `00-full-regression.yml` | Runs all of the above in order and prints the log window to verify. | 25 to 35 min |
+| `00-full-regression.yml` | Runs all of the above in order and prints the log window to verify. Add `include_chaos=true` to append the lag chaos burst. | 25 to 35 min (+20 with chaos) |
 
 `regression-target.yml` is the building block the cancel matrix dispatches.
+
+### Chaos harnesses (from `lag-test`)
+
+| Suite | What it does | Runtime |
+|---|---|---|
+| `60-runner-lag-chaos.yml` | One deterministic burst of `run_count` jobs with immediate cancels, post-assignment cancels, concurrency replacement, fast failures and capacity holds, then an observation window. Produces an artifact with per-run queue times and anomaly classification. Repeat a seed to compare controller versions on the same sequence. | 15 to 25 min |
+| `61-runner-assignment-stress.yml` | Several timed waves against the recovery cycle, late cancels that free registered runners (runner theft fuel), an oversubscribed first wave, and a final clean wave. Fails the run if any job that should have run never got a runner within the SLO. | 30 to 45 min |
+
+Both need a confirm string (`RUNNER-LAG-CHAOS`, `RUNNER-ASSIGNMENT-STRESS`) so they cannot be started by accident. `runner-lag-chaos-target.yml` is their probe. Their orchestrators run on `ubuntu-latest`; the originals ran on the pool under test.
+
+```sh
+gh workflow run 60-runner-lag-chaos.yml -R Monk-CI-Test2/monkci-regression -f confirm=RUNNER-LAG-CHAOS -f runner_label=monkci-ubuntu-24.04-4 -f run_count=12 -f seed=20260909
+gh workflow run 61-runner-assignment-stress.yml -R Monk-CI-Test2/monkci-regression -f confirm=RUNNER-ASSIGNMENT-STRESS -f runner_label=monkci-ubuntu-24.04-4
+# or as part of the full regression
+gh workflow run 00-full-regression.yml -R Monk-CI-Test2/monkci-regression -f runner=monkci-ubuntu-24.04-4 -f include_chaos=true
+```
 
 ## Run
 

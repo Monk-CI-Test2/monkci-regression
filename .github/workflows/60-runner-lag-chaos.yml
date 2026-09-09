@@ -1,0 +1,115 @@
+name: 60 Runner Lag Chaos
+run-name: runner-lag-chaos-controller/${{ inputs.runner_label }}/${{ github.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUNNER-LAG-CHAOS to start
+        required: true
+        type: string
+      runner_label:
+        description: MonkCI pool to test
+        required: true
+        default: monkci-ubuntu-24.04-4
+        type: choice
+        options:
+          - monkci-ubuntu-24.04-2
+          - monkci-ubuntu-24.04-4
+          - monkci-ubuntu-24.04-8
+          - monkci-ubuntu-24.04-16
+          - monkci-ubuntu-24.04-32
+      run_count:
+        description: Number of target workflow runs
+        required: true
+        default: 24
+        type: number
+      seed:
+        description: Deterministic seed; 0 uses this controller run ID
+        required: true
+        default: 0
+        type: number
+      cancel_queued_percent:
+        description: Runs cancelled immediately after dispatch
+        required: true
+        default: 20
+        type: number
+      cancel_running_percent:
+        description: Runs cancelled only after a runner starts
+        required: true
+        default: 25
+        type: number
+      concurrency_percent:
+        description: Runs sharing a cancel-in-progress concurrency group
+        required: true
+        default: 20
+        type: number
+      fail_percent:
+        description: Runs failing shortly after runner start
+        required: true
+        default: 10
+        type: number
+      hold_seconds:
+        description: Capacity hold / external-cancel timeout
+        required: true
+        default: 180
+        type: number
+      observation_minutes:
+        description: Maximum time to observe all child runs
+        required: true
+        default: 15
+        type: number
+
+permissions:
+  actions: write
+  contents: read
+
+# Prevent overlapping experiments in this repository. One chaos carnival is enough.
+concurrency:
+  group: runner-lag-chaos-orchestrator-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.REGRESSION_GH_TOKEN || secrets.CHAOS_GH_TOKEN || github.token }}
+      TARGET_WORKFLOW: runner-lag-chaos-target.yml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate confirmation
+        shell: bash
+        run: |
+          if [[ "${{ inputs.confirm }}" != "RUNNER-LAG-CHAOS" ]]; then
+            echo "Confirmation did not match RUNNER-LAG-CHAOS" >&2
+            exit 64
+          fi
+
+      - name: Run chaos experiment
+        id: chaos
+        shell: bash
+        env:
+          RUNNER_LABEL: ${{ inputs.runner_label }}
+          RUN_COUNT: ${{ inputs.run_count }}
+          CHAOS_SEED: ${{ inputs.seed }}
+          CANCEL_QUEUED_PERCENT: ${{ inputs.cancel_queued_percent }}
+          CANCEL_RUNNING_PERCENT: ${{ inputs.cancel_running_percent }}
+          CONCURRENCY_PERCENT: ${{ inputs.concurrency_percent }}
+          FAIL_PERCENT: ${{ inputs.fail_percent }}
+          HOLD_SECONDS: ${{ inputs.hold_seconds }}
+          OBSERVATION_MINUTES: ${{ inputs.observation_minutes }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+        run: scripts/runner-lag-chaos.sh
+
+      - name: Upload experiment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-lag-chaos-${{ steps.chaos.outputs.experiment_id || github.run_id }}
+          path: .runner-lag-chaos/
+          if-no-files-found: warn
+          retention-days: 14

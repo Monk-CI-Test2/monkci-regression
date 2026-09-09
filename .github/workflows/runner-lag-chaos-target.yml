@@ -1,0 +1,138 @@
+name: Runner Lag Chaos Target
+run-name: runner-lag-chaos/${{ inputs.experiment_id }}/${{ inputs.case_id }}/${{ inputs.scenario }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment_id:
+        description: Unique ID shared by one chaos experiment
+        required: true
+        type: string
+      case_id:
+        description: Unique case within the experiment
+        required: true
+        type: string
+      scenario:
+        description: Behavior after the runner starts
+        required: true
+        type: choice
+        options:
+          - success
+          - capacity_hold
+          - cancel_queued
+          - cancel_running
+          - fail_after_start
+          - concurrency_replace
+      runner_label:
+        description: MonkCI pool label
+        required: true
+        default: monkci-ubuntu-24.04-4
+        type: string
+      duration_seconds:
+        description: Maximum time the probe occupies a runner
+        required: true
+        default: 180
+        type: number
+      concurrency_group:
+        description: Shared only by concurrency replacement cases
+        required: false
+        default: ""
+        type: string
+      cancel_in_progress:
+        description: Let GitHub concurrency cancel an older run
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# Normal cases receive a unique group. Concurrency chaos cases deliberately share one.
+concurrency:
+  group: runner-lag-chaos-${{ inputs.concurrency_group || format('{0}-{1}', inputs.experiment_id, inputs.case_id) }}
+  cancel-in-progress: ${{ inputs.cancel_in_progress }}
+
+jobs:
+  probe:
+    name: probe
+    runs-on:
+      - self-hosted
+      - ${{ inputs.runner_label }}
+    timeout-minutes: 15
+    env:
+      CHAOS_EXPERIMENT_ID: ${{ inputs.experiment_id }}
+      CHAOS_CASE_ID: ${{ inputs.case_id }}
+      CHAOS_SCENARIO: ${{ inputs.scenario }}
+      CHAOS_DURATION_SECONDS: ${{ inputs.duration_seconds }}
+
+    steps:
+      - name: Emit runner assignment marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'CHAOS_PROBE_START experiment=%s case=%s scenario=%s run_id=%s run_attempt=%s runner_name=%s runner_os=%s runner_arch=%s timestamp=%s\n' \
+            "$CHAOS_EXPERIMENT_ID" \
+            "$CHAOS_CASE_ID" \
+            "$CHAOS_SCENARIO" \
+            "$GITHUB_RUN_ID" \
+            "$GITHUB_RUN_ATTEMPT" \
+            "$RUNNER_NAME" \
+            "$RUNNER_OS" \
+            "$RUNNER_ARCH" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          {
+            echo "### Runner lag chaos probe"
+            echo "- Experiment: \`$CHAOS_EXPERIMENT_ID\`"
+            echo "- Case: \`$CHAOS_CASE_ID\`"
+            echo "- Scenario: \`$CHAOS_SCENARIO\`"
+            echo "- Runner: \`$RUNNER_NAME\`"
+            echo "- Started: \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute probe behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          on_signal() {
+            printf 'CHAOS_PROBE_SIGNAL experiment=%s case=%s scenario=%s runner_name=%s timestamp=%s\n' \
+              "$CHAOS_EXPERIMENT_ID" "$CHAOS_CASE_ID" "$CHAOS_SCENARIO" \
+              "$RUNNER_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            exit 143
+          }
+          trap on_signal TERM INT
+
+          duration="$CHAOS_DURATION_SECONDS"
+          if ! [[ "$duration" =~ ^[0-9]+$ ]] || (( duration < 1 || duration > 720 )); then
+            echo "duration_seconds must be between 1 and 720" >&2
+            exit 64
+          fi
+
+          case "$CHAOS_SCENARIO" in
+            success)
+              # Short baseline: enough time to prove assignment, then clean completion.
+              sleep "$duration"
+              ;;
+
+            capacity_hold|cancel_queued|cancel_running|concurrency_replace)
+              # Hold capacity. cancel_queued/cancel_running should normally be
+              # cancelled by the controller workflow; concurrency_replace by GitHub.
+              sleep "$duration"
+              ;;
+
+            fail_after_start)
+              sleep "$duration"
+              echo "CHAOS_PROBE_INTENTIONAL_FAILURE case=$CHAOS_CASE_ID"
+              exit 42
+              ;;
+
+            *)
+              echo "Unknown scenario: $CHAOS_SCENARIO" >&2
+              exit 64
+              ;;
+          esac
+
+          printf 'CHAOS_PROBE_END experiment=%s case=%s scenario=%s runner_name=%s timestamp=%s\n' \
+            "$CHAOS_EXPERIMENT_ID" "$CHAOS_CASE_ID" "$CHAOS_SCENARIO" \
+            "$RUNNER_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

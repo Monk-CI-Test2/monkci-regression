@@ -1,0 +1,127 @@
+name: 61 Runner Assignment Stress
+run-name: runner-assignment-stress/${{ inputs.runner_label }}/${{ github.run_id }}
+
+# Multi-wave stress harness for the controller's receipt-based assignment
+# reconciliation (assigned-start timeout + requeue). Unlike runner-lag-chaos
+# (single burst), this harness:
+#   - dispatches several waves timed against the recovery cycle, so replacement
+#     runners for recovered jobs race with fresh younger demand,
+#   - cancels some runs AFTER assignment (late cancels) to free already
+#     registered runners — the exact fuel for runner theft,
+#   - can oversubscribe the pool on the first wave (surge) to force backlog,
+#   - finishes with a zero-chaos clean wave to detect false-positive requeues,
+#   - FAILS the workflow run when any job that should have run never received a
+#     runner or exceeded the recovery SLO. Green run = assignment ledger held.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUNNER-ASSIGNMENT-STRESS to start
+        required: true
+        type: string
+      runner_label:
+        description: MonkCI pool to test
+        required: true
+        default: monkci-ubuntu-24.04-4
+        type: choice
+        options:
+          - monkci-ubuntu-24.04-2
+          - monkci-ubuntu-24.04-4
+          - monkci-ubuntu-24.04-8
+          - monkci-ubuntu-24.04-16
+          - monkci-ubuntu-24.04-32
+      waves:
+        description: Number of chaos waves (a clean wave is always appended)
+        required: true
+        default: 3
+        type: number
+      runs_per_wave:
+        description: Target runs dispatched per chaos wave
+        required: true
+        default: 12
+        type: number
+      wave_interval_seconds:
+        description: Seconds between wave starts (120 aligns with one recovery cycle)
+        required: true
+        default: 120
+        type: number
+      chaos_intensity:
+        description: Percent of each wave that is hostile (cancels/replacements/failures)
+        required: true
+        default: 60
+        type: number
+      surge_factor_percent:
+        description: First-wave size as percent of runs_per_wave (200 = double burst)
+        required: true
+        default: 150
+        type: number
+      recovery_slo_seconds:
+        description: Max acceptable queue time for a job that must run (timeout+sweep+boot+margin)
+        required: true
+        default: 300
+        type: number
+      observation_minutes:
+        description: Extra observation time after the last wave
+        required: true
+        default: 12
+        type: number
+      seed:
+        description: Deterministic seed; 0 uses this controller run ID
+        required: true
+        default: 0
+        type: number
+
+permissions:
+  actions: write
+  contents: read
+
+# One stress experiment at a time; it shares the pool with its own probes.
+concurrency:
+  group: runner-assignment-stress-orchestrator-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      GH_TOKEN: ${{ secrets.REGRESSION_GH_TOKEN || secrets.CHAOS_GH_TOKEN || github.token }}
+      TARGET_WORKFLOW: runner-lag-chaos-target.yml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate confirmation
+        shell: bash
+        run: |
+          if [[ "${{ inputs.confirm }}" != "RUNNER-ASSIGNMENT-STRESS" ]]; then
+            echo "Confirmation did not match RUNNER-ASSIGNMENT-STRESS" >&2
+            exit 64
+          fi
+
+      - name: Run stress experiment
+        id: stress
+        shell: bash
+        env:
+          RUNNER_LABEL: ${{ inputs.runner_label }}
+          WAVES: ${{ inputs.waves }}
+          RUNS_PER_WAVE: ${{ inputs.runs_per_wave }}
+          WAVE_INTERVAL_SECONDS: ${{ inputs.wave_interval_seconds }}
+          CHAOS_INTENSITY: ${{ inputs.chaos_intensity }}
+          SURGE_FACTOR_PERCENT: ${{ inputs.surge_factor_percent }}
+          RECOVERY_SLO_SECONDS: ${{ inputs.recovery_slo_seconds }}
+          OBSERVATION_MINUTES: ${{ inputs.observation_minutes }}
+          CHAOS_SEED: ${{ inputs.seed }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+        run: scripts/runner-assignment-stress.sh
+
+      - name: Upload experiment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-assignment-stress-${{ steps.stress.outputs.experiment_id || github.run_id }}
+          path: .runner-assignment-stress/
+          if-no-files-found: warn
+          retention-days: 14
