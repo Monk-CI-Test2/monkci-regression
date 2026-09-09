@@ -47,7 +47,8 @@ echo
 RED=0
 oom=$(count "$(ev busy_vm_released_oom_restart)")
 oom_msg=$(count "$(msg 'likely OOM restart mid-job')")
-restored=$(by_job "$(ev assigned_job_demand_restored)")
+# The store and the auditor both log this event per restore; count the auditor's line only.
+restored=$(by_job "$(ev assigned_job_demand_restored) jsonPayload.component=\"assignment_receipt_auditor\"")
 exhausted=$(count "$(ev assigned_job_recovery_exhausted)")
 parked_reg=$(count "$(ev stale_registration_parked)")
 elsewhere=$(count "$(ev assigned_job_completed_elsewhere)")
