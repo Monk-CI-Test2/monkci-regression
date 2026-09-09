@@ -1,0 +1,89 @@
+name: 50 Docker Cache Example
+run-name: docker-cache/${{ inputs.runner }}/${{ inputs.salt }}/${{ github.run_id }}
+
+# The smallest useful docker cache check: one writer seeds the per-repo cache
+# with a tiny image, one reader on a fresh VM must then get a cache hit and a
+# mostly CACHED build. The heavier matrices live in Monk-CI-Test2/docker-cache-test.
+#
+# Change `salt` to force a cold round. Runtime: a few minutes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: MonkCI pool label
+        default: monkci-ubuntu-24.04-4
+        type: choice
+        options:
+          - monkci-ubuntu-24.04-2
+          - monkci-ubuntu-24.04-4
+      salt:
+        description: Cache-bust salt
+        default: v1
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  writer:
+    name: 1 writer (seed)
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Build context
+        env:
+          SALT: ${{ inputs.salt }}
+        run: |
+          mkdir -p ctx
+          cat > ctx/Dockerfile <<EOF
+          FROM alpine:3.20
+          RUN echo "salt=${SALT}" > /salt && sleep 3
+          RUN dd if=/dev/zero of=/blob bs=1M count=32 && sha256sum /blob /salt > /sum && sleep 3
+          RUN apk add --no-cache curl
+          EOF
+      - name: Acquire builder
+        id: builder
+        uses: MonkCi-Inc/setup-docker-builder@v1
+        with:
+          nofallback: 'true'
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${MONKCI_BUILDER:-}" ]] || { echo "::error::MONKCI_BUILDER not set; cache acquire failed"; exit 1; }
+          docker buildx build --builder "$MONKCI_BUILDER" --output type=cacheonly --progress plain ctx 2>&1 | tee build.log
+          echo "- writer: cache-hit=${{ steps.builder.outputs.cache-hit }} cached_steps=$(grep -Eic '\bCACHED\b' build.log || true)" >> "$GITHUB_STEP_SUMMARY"
+
+  reader:
+    name: 2 reader (must hit)
+    needs: writer
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Build context (identical)
+        env:
+          SALT: ${{ inputs.salt }}
+        run: |
+          mkdir -p ctx
+          cat > ctx/Dockerfile <<EOF
+          FROM alpine:3.20
+          RUN echo "salt=${SALT}" > /salt && sleep 3
+          RUN dd if=/dev/zero of=/blob bs=1M count=32 && sha256sum /blob /salt > /sum && sleep 3
+          RUN apk add --no-cache curl
+          EOF
+      - name: Acquire builder
+        id: builder
+        uses: MonkCi-Inc/setup-docker-builder@v1
+        with:
+          nofallback: 'true'
+      - name: Build and assert cached
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${MONKCI_BUILDER:-}" ]] || { echo "::error::MONKCI_BUILDER not set; cache acquire failed"; exit 1; }
+          docker buildx build --builder "$MONKCI_BUILDER" --output type=cacheonly --progress plain ctx 2>&1 | tee build.log
+          cached=$(grep -Eic '\bCACHED\b' build.log || true)
+          echo "- reader: cache-hit=${{ steps.builder.outputs.cache-hit }} cached_steps=$cached" >> "$GITHUB_STEP_SUMMARY"
+          [[ "${{ steps.builder.outputs.cache-hit }}" == "true" ]] || { echo "::error::reader expected cache-hit=true"; exit 1; }
+          (( cached >= 2 )) || { echo "::error::reader build had only $cached CACHED layers"; exit 1; }

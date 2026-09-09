@@ -1,0 +1,61 @@
+name: 40 Cancel Matrix
+run-name: cancel-matrix/${{ inputs.runner_label }}/x${{ inputs.count }}/${{ github.run_id }}
+
+# Dispatches a mix of jobs and cancels some while queued and some after they
+# started, plus a few deliberate failures. Grades every outcome and finishes with
+# a clean probe that must get a runner within the SLO. Exercises the cancelled
+# completion path, late cancellations freeing registered runners (runner theft),
+# and the pool's health afterwards.
+#
+# Runtime: about 10 minutes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: MonkCI pool label
+        default: monkci-ubuntu-24.04-4
+        type: choice
+        options:
+          - monkci-ubuntu-24.04-2
+          - monkci-ubuntu-24.04-4
+          - monkci-ubuntu-24.04-8
+      count:
+        description: Number of target jobs
+        default: 8
+        type: number
+      hold_seconds:
+        description: Runner hold for running-cancel cases
+        default: 60
+        type: number
+      seed:
+        description: Seed for the scenario mix (repeat a seed to repeat a run)
+        default: 20260909
+        type: number
+      queue_slo_seconds:
+        description: Max acceptable wait for a runner
+        default: 600
+        type: number
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  orchestrate:
+    name: orchestrate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ secrets.REGRESSION_GH_TOKEN || github.token }}
+      RUNNER_LABEL: ${{ inputs.runner_label }}
+      COUNT: ${{ inputs.count }}
+      HOLD_SECONDS: ${{ inputs.hold_seconds }}
+      SEED: ${{ inputs.seed }}
+      QUEUE_SLO_SECONDS: ${{ inputs.queue_slo_seconds }}
+      CANCEL_QUEUED_PCT: 25
+      CANCEL_RUNNING_PCT: 25
+      FAIL_PCT: 12
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/cancel-matrix.sh

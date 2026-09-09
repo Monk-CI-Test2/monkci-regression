@@ -1,0 +1,77 @@
+name: Regression Target
+run-name: target/${{ inputs.suite_id }}/${{ inputs.case_id }}/${{ inputs.scenario }}
+
+# One dispatchable job on a MonkCI pool. The cancel matrix and the full suite
+# drive many of these with different scenarios and then cancel, time, or grade
+# them from the outside. Nothing here is clever on purpose: the interesting
+# behaviour is what the controller does around it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite_id:
+        description: Identifier shared by one suite run
+        required: true
+        type: string
+      case_id:
+        description: Unique case within the suite
+        required: true
+        type: string
+      scenario:
+        description: What the job does once it has a runner
+        required: true
+        default: success
+        type: choice
+        options:
+          - success        # finish in a few seconds
+          - hold           # occupy the runner for hold_seconds, then succeed
+          - fail           # fail after a few seconds
+          - cancel_queued  # orchestrator cancels before a runner is assigned
+          - cancel_running # orchestrator cancels after the job started
+      hold_seconds:
+        description: Seconds to occupy the runner for hold / cancel_running
+        required: false
+        default: 60
+        type: number
+      runner_label:
+        description: MonkCI pool label
+        required: false
+        default: monkci-ubuntu-24.04-4
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 20
+    env:
+      SUITE_ID: ${{ inputs.suite_id }}
+      CASE_ID: ${{ inputs.case_id }}
+      SCENARIO: ${{ inputs.scenario }}
+      HOLD_SECONDS: ${{ inputs.hold_seconds }}
+    steps:
+      - name: Marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'REGRESSION_PROBE suite=%s case=%s scenario=%s run_id=%s attempt=%s runner=%s at=%s\n' \
+            "$SUITE_ID" "$CASE_ID" "$SCENARIO" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$RUNNER_NAME" "$(date -u +%FT%TZ)"
+          echo "- runner: \`$RUNNER_NAME\`  scenario: \`$SCENARIO\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: Act
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$SCENARIO" in
+            success|cancel_queued)
+              sleep 3 ;;
+            hold|cancel_running)
+              echo "holding runner for ${HOLD_SECONDS}s"
+              for ((i=0; i<HOLD_SECONDS; i++)); do sleep 1; done ;;
+            fail)
+              sleep 3; echo "::error::deliberate failure"; exit 1 ;;
+            *)
+              echo "::error::unknown scenario $SCENARIO"; exit 2 ;;
+          esac

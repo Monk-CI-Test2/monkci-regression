@@ -1,0 +1,99 @@
+name: 30 Queue Pressure
+run-name: queue-pressure/${{ inputs.runner }}/x${{ inputs.count }}/${{ github.run_id }}
+
+# More jobs than warm VMs, each holding its runner. GitHub hands every new runner
+# to the oldest queued job, so runners registered "for" a job are routinely taken
+# by an older one. That is the receipt-timeout and recovery path. Every job must
+# still get a runner within the SLO, and no job may be recovered more than the
+# configured bound (see scripts/verify-staging-logs.sh).
+#
+# Runtime: a few minutes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: MonkCI pool label
+        default: monkci-ubuntu-24.04-4
+        type: choice
+        options:
+          - monkci-ubuntu-24.04-2
+          - monkci-ubuntu-24.04-4
+          - monkci-ubuntu-24.04-8
+      count:
+        description: Number of concurrent holding jobs
+        default: 8
+        type: number
+      hold_seconds:
+        description: How long each job occupies its runner
+        default: 90
+        type: number
+      max_queue_seconds:
+        description: Fail if any job waited longer than this for a runner
+        default: 900
+        type: number
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      ids: ${{ steps.ids.outputs.ids }}
+    steps:
+      - id: ids
+        run: echo "ids=$(seq -s, 1 ${{ inputs.count }} | jq -c 'split(",") | map(tonumber)' -R)" >> "$GITHUB_OUTPUT"
+
+  hold:
+    name: hold-${{ matrix.id }}
+    needs: plan
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        id: ${{ fromJSON(needs.plan.outputs.ids) }}
+    steps:
+      - shell: bash
+        run: |
+          echo "hold job ${{ matrix.id }} on $RUNNER_NAME for ${{ inputs.hold_seconds }}s"
+          for ((i=0; i<${{ inputs.hold_seconds }}; i++)); do sleep 1; done
+
+  verdict:
+    name: verdict
+    needs: [plan, hold]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MAX_QUEUE: ${{ inputs.max_queue_seconds }}
+      EXPECTED: ${{ inputs.count }}
+    steps:
+      - name: Grade
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ needs.hold.result }}" == "success" ]] || { echo "::error::some hold jobs did not succeed (${{ needs.hold.result }})"; FAILED=1; }
+          jobs=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[] | select(.name | startswith("hold-")) | [.name, .conclusion, .created_at, .started_at, .completed_at, .runner_name] | @tsv')
+          n=0; worst=0; sum=0
+          {
+            echo "## Queue pressure x$EXPECTED on ${{ inputs.runner }}, hold ${{ inputs.hold_seconds }}s"
+            echo ""
+            echo "| job | conclusion | queued (s) | ran (s) | runner |"
+            echo "|---|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          while IFS=$'\t' read -r name concl created started completed runner; do
+            n=$((n+1))
+            q=$(( $(date -d "$started" +%s) - $(date -d "$created" +%s) ))
+            r=$(( $(date -d "$completed" +%s) - $(date -d "$started" +%s) ))
+            sum=$((sum+q)); (( q > worst )) && worst=$q
+            echo "| $name | $concl | $q | $r | $runner |" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$jobs"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- jobs: $n, mean queue wait: $((sum / (n>0?n:1)))s, worst: ${worst}s (limit ${MAX_QUEUE}s)" >> "$GITHUB_STEP_SUMMARY"
+          (( n == EXPECTED )) || { echo "::error::expected $EXPECTED jobs, API returned $n"; FAILED=1; }
+          (( worst <= MAX_QUEUE )) || { echo "::error::worst queue wait ${worst}s exceeds ${MAX_QUEUE}s"; FAILED=1; }
+          [[ -z "${FAILED:-}" ]]

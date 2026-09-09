@@ -1,0 +1,71 @@
+name: 00 Full Regression
+run-name: full-regression/${{ inputs.runner }}/${{ github.run_id }}
+
+# Runs every suite in order against one pool and summarises. Sequential on
+# purpose so the controller logs for each suite are easy to read apart.
+# Runtime: about 25 to 35 minutes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: MonkCI pool label
+        default: monkci-ubuntu-24.04-4
+        type: choice
+        options:
+          - monkci-ubuntu-24.04-2
+          - monkci-ubuntu-24.04-4
+          - monkci-ubuntu-24.04-8
+      include_docker_cache:
+        description: Also run the docker cache example
+        default: true
+        type: boolean
+  # schedule:
+  #   - cron: "0 3 * * *"   # nightly, if wanted
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  suites:
+    name: suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.REGRESSION_GH_TOKEN || github.token }}
+      RUNNER: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run suites
+        shell: bash
+        run: |
+          set -uo pipefail
+          started=$(date -u +%FT%TZ)
+          declare -A RES
+          run() { local name="$1"; shift; out=$(scripts/run-suite.sh "$@" 2>&1) && RES[$name]="pass $out" || RES[$name]="FAIL $out"; echo "$name: ${RES[$name]}"; }
+          run smoke          10-smoke.yml               -f runner="$RUNNER"
+          run fast-jobs      20-fast-jobs.yml           -f runner="$RUNNER" -f count=12
+          run cancel-matrix  40-cancel-matrix.yml       -f runner_label="$RUNNER" -f count=8
+          run queue-pressure 30-queue-pressure.yml      -f runner="$RUNNER" -f count=8 -f hold_seconds=90
+          if [[ "${{ inputs.include_docker_cache }}" == "true" ]]; then
+            run docker-cache 50-docker-cache-example.yml -f runner="$RUNNER" -f salt="r$GITHUB_RUN_ID"
+          fi
+          ended=$(date -u +%FT%TZ)
+          {
+            echo "## Full regression on $RUNNER"
+            echo ""
+            echo "| suite | result | run |"
+            echo "|---|---|---|"
+            for k in smoke fast-jobs cancel-matrix queue-pressure docker-cache; do
+              [[ -n "${RES[$k]:-}" ]] || continue
+              r="${RES[$k]}"; echo "| $k | ${r%% *} | ${r#* } |"
+            done
+            echo ""
+            echo "Window for controller-side checks: \`$started\` to \`$ended\`"
+            echo ""
+            echo '```'
+            echo "scripts/verify-staging-logs.sh --start $started --end $ended"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          for k in "${!RES[@]}"; do [[ "${RES[$k]}" == pass* ]] || exit 1; done

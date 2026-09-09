@@ -1,0 +1,44 @@
+name: 10 Smoke
+run-name: smoke/${{ inputs.runner }}/${{ github.run_id }}
+
+# One ordinary job. If this is red nothing else is worth reading.
+# Validates: queued -> VM -> runner registered -> job runs -> job completes,
+# and that the runner name is one of our VMs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: MonkCI pool label
+        default: monkci-ubuntu-24.04-4
+        type: choice
+        options:
+          - monkci-ubuntu-24.04-2
+          - monkci-ubuntu-24.04-4
+          - monkci-ubuntu-24.04-8
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Runner identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH cpus=$(nproc) mem=$(free -m | awk '/Mem:/{print $2}')MB"
+          [[ "$RUNNER_NAME" == mig-* ]] || { echo "::error::runner name '$RUNNER_NAME' is not a MonkCI VM"; exit 1; }
+          {
+            echo "## Smoke"
+            echo "- runner: \`$RUNNER_NAME\`"
+            echo "- cpus: $(nproc), memory: $(free -m | awk '/Mem:/{print $2}') MB"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Do a little work
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5; do echo "tick $i"; sleep 2; done
+          echo ok
