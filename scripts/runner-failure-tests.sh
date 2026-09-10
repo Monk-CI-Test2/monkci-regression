@@ -113,8 +113,16 @@ t_boot() {
   [[ -n "${name:-}" ]] || { fail "no running pool VM"; return; }
   created=$(date -u -d "$ts" +%Y-%m-%dT%H:%M:%SZ)
   echo "  VM $name created $created"
-  log=$(gcloud logging read --project "$PROJECT" --order asc --limit 80 --format 'value(jsonPayload.message)' \
-    "logName=\"projects/${PROJECT}/logs/miglet_startup_file\" AND labels.\"compute.googleapis.com/resource_name\"=\"$name\"" 2>/dev/null)
+  # The Ops Agent labels entries with either the bare name or the FQDN, and it
+  # often starts tailing the file only after the boot lines were written, so
+  # prefer the file on the VM and use Cloud Logging as the fallback.
+  local zone; zone=$(zone_of "$name")
+  log=$(vm_ssh "$name" "$zone" 'sudo cat /var/log/miglet-startup.log 2>/dev/null' | head -200)
+  if ! grep -q "startup script started" <<<"$log"; then
+    echo "  (could not read the log on the VM, falling back to Cloud Logging)"
+    log=$(gcloud logging read --project "$PROJECT" --order asc --limit 200 --format 'value(jsonPayload.message)' \
+      "logName=\"projects/${PROJECT}/logs/miglet_startup_file\" AND labels.\"compute.googleapis.com/resource_name\"=~\"^${name}(\\.|\$)\"" 2>/dev/null)
+  fi
   grep -q "Runner v.* installed" <<<"$log" && pass "runner installed at boot" || fail "no 'Runner installed' line in startup log"
   grep -q "retrying in" <<<"$log" && echo "  INFO: boot needed download retries (recovered)" || pass "no download retries needed"
   grep -q "Failed to download" <<<"$log" && fail "download failed at boot"
