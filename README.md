@@ -35,6 +35,20 @@ gh workflow run 61-runner-assignment-stress.yml -R Monk-CI-Test2/monkci-regressi
 gh workflow run 00-full-regression.yml -R Monk-CI-Test2/monkci-regression -f runner=monkci-ubuntu-24.04-4 -f include_chaos=true
 ```
 
+### Runner-download / dead-warm-VM failure paths
+
+`scripts/runner-failure-tests.sh <env> <test> [vm]` drives the failure paths fixed by
+monkci-core-miglet-agent `fix/runner-download-retry` against a live pool VM over IAP SSH
+and grades the controller and custom-mig reaction from Cloud Logging. Tests: `preflight`,
+`boot`, `invariant` (read-only), `transient`, `persistent` (blackhole github.com on the VM),
+`gate` (removes the runner; the VM is retired and replaced). `all` runs them in order,
+about 25 minutes. Run it after every image or miglet change:
+
+```sh
+scripts/runner-failure-tests.sh staging all
+scripts/runner-failure-tests.sh prod invariant     # read-only, safe on prod
+```
+
 ## Run
 
 ```sh
