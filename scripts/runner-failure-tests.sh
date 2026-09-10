@@ -56,7 +56,15 @@ pool_vms() {  # pool_vms [extra-filter]
     --filter="name~'^${POOL_PREFIX}' AND status=RUNNING AND metadata.items.environment=${NS}${1:+ AND $1}" \
     --sort-by=~creationTimestamp --format='value(name,creationTimestamp)'
 }
-zone_of() { gcloud compute instances list --project "$PROJECT" --filter="name=$1" --format='value(zone.basename())'; }
+zone_of() {  # retries: the GCE list API occasionally returns a transient 5xx
+  local z i
+  for i in 1 2 3 4 5; do
+    z=$(gcloud compute instances list --project "$PROJECT" --filter="name=$1" --format='value(zone.basename())' 2>/dev/null)
+    [[ -n "$z" ]] && { echo "$z"; return 0; }
+    sleep 5
+  done
+  return 1
+}
 vm_ssh() {  # vm_ssh <vm> <zone> <script>
   gcloud compute ssh "$1" --project "$PROJECT" --zone "$2" --tunnel-through-iap --quiet \
     --ssh-flag='-o ServerAliveInterval=30' --ssh-flag='-o ConnectTimeout=20' --command "$3" 2>&1 \
@@ -81,7 +89,7 @@ ctl_has() { ctl_logs "$1" "$2" "$3" | grep -q "$4"; }
 need_vm() {
   [[ -n "$VM" ]] || VM=$(pool_vms | tail -1 | cut -f1)
   [[ -n "$VM" ]] || { fail "no RUNNING ${POOL_PREFIX} VM with environment=${NS} in ${PROJECT}"; return 1; }
-  ZONE=$(zone_of "$VM")
+  ZONE=$(zone_of "$VM") || { fail "could not resolve the zone of $VM"; return 1; }
   echo "  target VM: $VM ($ZONE)"
 }
 
