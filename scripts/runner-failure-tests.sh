@@ -189,6 +189,12 @@ t_persistent() {
     echo "  INFO: hand-off image: expecting ERROR report and retirement instead of init retries"
     wait_for $((GATE_S+120)) 20 "controller 'MIGlet reported error' for $VM" ctl_has mig-controller "$since" "jsonPayload.vm_id=\"$VM\"" 'reported error' \
       && pass "VM reported ERROR after hand-off" || fail "no ERROR report after hand-off"
+    wait_for 240 20 "custom-mig deletes $VM" ctl_has custom-mig "$since" "jsonPayload.vmId=\"$VM\"" 'deleted successfully' \
+      && pass "custom-mig deleted the VM" || fail "custom-mig did not delete the VM"
+    # The VM is gone; later tests must pick the replacement once it has reported in.
+    local old=$VM; VM=""
+    wait_for 300 20 "replacement VM reports to the controller" bash -c "$(declare -f pool_vms ctl_has ctl_logs); PROJECT=$PROJECT NS=$NS POOL_PREFIX=$POOL_PREFIX; v=\$(pool_vms 'name!=$old' | tail -1 | cut -f1); [ -n \"\$v\" ] && ctl_has mig-controller '$since' \"jsonPayload.vm_id=\\\"\$v\\\"\" ." \
+      && pass "replacement VM created and reported ready" || fail "no replacement VM reported to the controller"
     return
   fi
   grep -q 'init_restarts=[1-9]' <<<"$out" && pass "systemd restarted miglet-init" || fail "miglet-init was not restarted"
@@ -215,8 +221,8 @@ t_gate() {
   moves=$(count_ctl mig-controller "$since" "jsonPayload.vm_id=\"$VM\"" 'from warm pool to completed')
   (( errs == 1 )) && pass "exactly one ERROR report" || fail "expected 1 ERROR report, got $errs (duplicate-report race?)"
   (( moves == 1 )) && pass "VM moved warm -> completed" || fail "warm->completed move count $moves"
-  # custom-mig does not log the VM under jsonPayload.vm_id; match the name anywhere in the entry.
-  wait_for 240 20 "custom-mig deletes $VM" ctl_has custom-mig "$since" "\"$VM\"" 'deleted successfully' \
+  # custom-mig logs the VM name under jsonPayload.vmId (the controller uses vm_id).
+  wait_for 240 20 "custom-mig deletes $VM" ctl_has custom-mig "$since" "jsonPayload.vmId=\"$VM\"" 'deleted successfully' \
     && pass "custom-mig deleted the VM" || fail "custom-mig did not delete the VM"
   wait_for 180 20 "a replacement pool VM appears" bash -c "$(declare -f pool_vms); PROJECT=$PROJECT NS=$NS POOL_PREFIX=$POOL_PREFIX; pool_vms 'name!=$VM' | grep -q ." \
     && pass "replacement VM created" || fail "no replacement VM"
