@@ -15,9 +15,16 @@ on `ubuntu-latest` so they never consume pool capacity themselves.
 | `40-cancel-matrix.yml` | Mixed cancels while queued, cancels after start, failures and successes, then a clean probe that must get a runner within the SLO. Exercises cancelled completions, runner theft after late cancels, and pool health afterwards. | about 10 min |
 | `30-queue-pressure.yml` | More jobs than warm VMs, each holding its runner. Drives the receipt-timeout and recovery path through GitHub's FIFO assignment. Every job must run within the SLO. | 4 to 8 min |
 | `50-docker-cache-example.yml` | Writer seeds the per-repo docker cache, a reader on a fresh VM must hit it. The small example; the heavy matrices live in `docker-cache-test`. | 3 to 5 min |
+| `70-lifecycle-edges.yml` | Exact outcomes, GitHub timeout, observed cancellation phases, reruns with fresh job IDs/runners, optional concurrent pools, and clean probes. Pair with the read-only state verifier. | 10 to 20 min |
 | `00-full-regression.yml` | Runs all of the above in order and prints the log window to verify. Add `include_chaos=true` to append the lag chaos burst. | 25 to 35 min (+20 with chaos) |
 
 `regression-target.yml` is the building block the cancel matrix dispatches.
+
+See [lifecycle coverage and release validation](docs/lifecycle-coverage.md) for
+the existing gaps, the new deterministic cases, and read-only Redis/Postgres
+verification. The full regression now includes lifecycle edges by default
+(`include_lifecycle_edges=false` skips it), adding roughly 10–20 minutes.
+`05-harness-checks.yml` tests the new harness itself on GitHub-hosted runners.
 
 ### Chaos harnesses (from `lag-test`)
 

@@ -1,0 +1,63 @@
+name: 70 Lifecycle Edges
+run-name: lifecycle-edges/${{ inputs.runner }}/${{ github.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Primary staging pool
+        type: choice
+        default: monkci-ubuntu-24.04-4
+        options:
+          - monkci-ubuntu-24.04-2
+          - monkci-ubuntu-24.04-4
+          - monkci-ubuntu-24.04-8
+      second_pool:
+        description: Optional second pool for concurrent routing checks
+        type: choice
+        default: none
+        options:
+          - none
+          - monkci-ubuntu-24.04-2
+          - monkci-ubuntu-24.04-4
+          - monkci-ubuntu-24.04-8
+      burst:
+        description: Fast mixed success/failure jobs (2 to 12)
+        type: number
+        default: 6
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: lifecycle-edges-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ secrets.REGRESSION_GH_TOKEN || github.token }}
+      WORKFLOW_REF: ${{ github.ref_name }}
+      POOL: ${{ inputs.runner }}
+      SECOND_POOL: ${{ inputs.second_pool }}
+      BURST: ${{ inputs.burst }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise lifecycle edges
+        shell: bash
+        run: |
+          args=(--ref "$WORKFLOW_REF" --pool "$POOL" --burst "$BURST" --output .lifecycle-edges/run)
+          if [[ "$SECOND_POOL" != none ]]; then args+=(--second-pool "$SECOND_POOL"); fi
+          python3 scripts/lifecycle_edges.py "${args[@]}"
+      - name: Upload GitHub evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-edges-${{ github.run_id }}
+          path: .lifecycle-edges/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

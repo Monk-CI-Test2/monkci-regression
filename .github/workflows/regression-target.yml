@@ -26,6 +26,8 @@ on:
           - success        # finish in a few seconds
           - hold           # occupy the runner for hold_seconds, then succeed
           - fail           # fail after a few seconds
+          - fail_once      # first attempt fails; rerun must succeed with a new job ID
+          - timeout        # GitHub ends the job, rather than a failing shell step
           - cancel_queued  # orchestrator cancels before a runner is assigned
           - cancel_running # orchestrator cancels after the job started
       hold_seconds:
@@ -46,7 +48,7 @@ jobs:
   probe:
     name: probe
     runs-on: ${{ inputs.runner_label }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ inputs.scenario == 'timeout' && 1 || 20 }}
     env:
       SUITE_ID: ${{ inputs.suite_id }}
       CASE_ID: ${{ inputs.case_id }}
@@ -72,6 +74,12 @@ jobs:
               for ((i=0; i<HOLD_SECONDS; i++)); do sleep 1; done ;;
             fail)
               sleep 3; echo "::error::deliberate failure"; exit 1 ;;
+            fail_once)
+              if [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]; then
+                echo "::error::deliberate first-attempt failure"; exit 42
+              fi ;;
+            timeout)
+              sleep 180 ;;
             *)
               echo "::error::unknown scenario $SCENARIO"; exit 2 ;;
           esac
