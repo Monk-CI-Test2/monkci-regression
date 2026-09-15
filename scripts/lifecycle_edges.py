@@ -72,6 +72,23 @@ def grade(case, run, jobs, slo):
     return errors
 
 
+def grade_identities(cases):
+    errors, ids, runners = [], set(), set()
+    for case in cases:
+        for job in case.get("jobs", []):
+            if job.get("name") != "probe":
+                continue
+            if job.get("id") in ids:
+                errors.append(f"{case['name']}: GitHub job ID appeared in more than one case/attempt")
+            ids.add(job.get("id"))
+            runner = job.get("runner_name")
+            if runner:
+                if runner in runners:
+                    errors.append(f"{case['name']}: ephemeral runner executed more than one job")
+                runners.add(runner)
+    return errors
+
+
 class GitHub:
     def api(self, path, method="GET", payload=None):
         # Only reads may be retried: replaying dispatch/rerun could create extra work.
@@ -207,22 +224,31 @@ class Suite:
         # coverage failure, never silently counted as a queued cancellation pass.
         queued = self.dispatch("queued-cancel", "cancel_queued", pool, "cancelled")
         self.cancel(queued, "queued")
-        running = self.dispatch("running-cancel", "cancel_running", pool, "cancelled", hold=180)
-        first = [queued, running]
+        long_job = self.dispatch("long-running", "hold", pool, hold=180, min_duration=175)
+        first = [queued, long_job]
         for n in range(self.args.burst):
             first.append(self.dispatch(f"fast-{n}", "success" if n % 2 == 0 else "fail", pool,
                                        "success" if n % 2 == 0 else "failure"))
-        first.append(self.dispatch("long-running", "hold", pool, hold=180, min_duration=175))
         first.append(self.dispatch("timeout", "timeout", pool, "timed_out", min_duration=50))
         fail_once = self.dispatch("fail-once", "fail_once", pool, "failure")
         first.append(fail_once)
         if self.args.second_pool:
             for scenario, outcome in (("success", "success"), ("fail", "failure")):
                 first.append(self.dispatch(f"other-pool-{scenario}", scenario, self.args.second_pool, outcome))
+        # Observe/cancel this immediately; dispatch discovery for the other cases
+        # can take long enough for an earlier short hold to finish naturally.
+        running = self.dispatch("running-cancel", "cancel_running", pool, "cancelled", hold=180)
+        first.append(running)
         self.cancel(running, "running")
         self.wait(first)
         success = next(c for c in first if c["name"] == "fast-0")
-        self.wait([self.rerun(c, failed_only=c is fail_once) for c in (fail_once, success, queued, running)])
+        reruns = []
+        for case in (fail_once, success, queued, running):
+            if case.get("errors"):
+                self.report["errors"].append(f"{case['name']}: rerun not exercised because its prerequisite failed")
+            else:
+                reruns.append(self.rerun(case, failed_only=case is fail_once))
+        self.wait(reruns)
         # Replay old job reads after reruns: their conclusions must remain intact.
         for case in first:
             jobs = self.gh.jobs(case["run_id"], 1)
@@ -249,6 +275,7 @@ class Suite:
 
     def finish(self):
         self.report["ended_at"] = utcnow()
+        self.report["errors"].extend(grade_identities(self.report["cases"]))
         self.report["passed"] = not self.report["errors"] and all(
             "errors" in c and not c["errors"] for c in self.report["cases"])
         self.save()

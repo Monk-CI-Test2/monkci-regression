@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from lifecycle_edges import GitHub, POOLS, REPO, Suite, grade
+from lifecycle_edges import GitHub, POOLS, REPO, Suite, grade, grade_identities
 from verify_lifecycle_state import SNAPSHOT_LUA, expected_jobs, grade_snapshot
 
 
@@ -80,6 +80,17 @@ class GitHubVerdictTests(unittest.TestCase):
         self.assertEqual(2, len(grade(c, r, [j], 600)))
         j.update(id=124, runner_name="monkci--ubuntu-24-04-4--new")
         self.assertEqual([], grade(c, r, [j], 600))
+
+    def test_ephemeral_runner_cannot_serve_two_independent_cases(self):
+        _, _, job = fixture()
+        cases = [{"name": "a", "jobs": [job]}, {"name": "b", "jobs": [{**job, "id": 124}]}]
+        self.assertTrue(grade_identities(cases))
+        cases[1]["jobs"][0]["runner_name"] = "monkci--ubuntu-24-04-4--new"
+        self.assertEqual([], grade_identities(cases))
+
+    def test_duplicate_job_evidence_cannot_count_as_two_completed_cases(self):
+        _, _, job = fixture()
+        self.assertTrue(grade_identities([{"name": "a", "jobs": [job]}, {"name": "b", "jobs": [job]}]))
 
     def test_long_running_case_must_actually_outlive_recovery_interval(self):
         c, r, j = fixture()
