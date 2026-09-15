@@ -30,7 +30,7 @@ class GitHubVerdictTests(unittest.TestCase):
         self.assertEqual([], grade(c, r, [j], 600))
 
     def test_green_run_cannot_hide_bad_or_missing_job_evidence(self):
-        for change in ({"conclusion": "failure"}, {"status": "queued"}, {"runner_name": ""},
+        for change in ({"id": None}, {"id": -1}, {"conclusion": "failure"}, {"status": "queued"}, {"runner_name": ""},
                        {"runner_name": "monkci--ubuntu-24-04-2--other"}, {"labels": []},
                        {"run_attempt": 2}, {"created_at": None}, {"started_at": None},
                        {"completed_at": None}, {"started_at": "2026-09-15T00:20:00Z"},

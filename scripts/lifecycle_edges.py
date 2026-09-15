@@ -38,6 +38,8 @@ def grade(case, run, jobs, slo):
     if len(probes) != 1:
         return errors + [f"expected exactly one probe, found {len(probes)}"]
     job = probes[0]
+    if type(job.get("id")) is not int or job["id"] <= 0:
+        errors.append("missing or invalid GitHub job ID")
     if job.get("run_attempt") != case["attempt"]:
         errors.append("job belongs to a different attempt")
     expected_conclusions = [case["job_conclusion"]]
