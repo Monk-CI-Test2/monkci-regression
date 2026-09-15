@@ -1,0 +1,43 @@
+name: 05 Harness Checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/lifecycle_edges.py'
+      - 'scripts/verify_lifecycle_state.py'
+      - 'tests/**'
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Redis client
+        run: sudo apt-get update -qq && sudo apt-get install -y redis-tools
+      - name: Test verdicts and read-only Redis snapshot
+        env:
+          LIFECYCLE_TEST_REDIS_PORT: 6379
+        run: python3 -m unittest discover -s tests -v
+      - name: Validate lifecycle workflows
+        run: >-
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck=''
+          .github/workflows/05-harness-checks.yml
+          .github/workflows/70-lifecycle-edges.yml
+          .github/workflows/regression-target.yml
+          .github/workflows/00-full-regression.yml
