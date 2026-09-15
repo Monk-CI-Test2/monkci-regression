@@ -12,7 +12,7 @@ conclusion. Use both GitHub evidence and the read-only state verdict below.
 | Very short successful jobs | 20 fast jobs | Deterministic mixed short successes and failures; reconcile each conclusion |
 | Backlog and shared runner assignment | 30 queue pressure, 60 lag chaos, 61 assignment stress | Long job concurrent with short jobs; clean probes after the workload |
 | Queued/running cancellation | 40 cancel matrix, 60/61 | Record the observed phase; a missed cancellation window fails coverage instead of passing |
-| Job exceeds its GitHub timeout | None | Real one-minute job timeout; require the job's `timed_out` conclusion |
+| Job exceeds its GitHub timeout | None | Real one-minute job timeout; require GitHub's timeout annotation and preserve its actual conclusion (`cancelled` or `timed_out`) |
 | Rerun a failed job | None | First attempt intentionally fails, failed-jobs rerun succeeds; new job ID and runner |
 | Rerun successful/cancelled runs | None | Rerun after success, queued cancellation and running cancellation |
 | Old attempt identity and conclusion | None | Read attempt-specific job lists again after reruns and check old results remain unchanged |

@@ -40,7 +40,15 @@ def grade(case, run, jobs, slo):
     job = probes[0]
     if job.get("run_attempt") != case["attempt"]:
         errors.append("job belongs to a different attempt")
-    if job.get("status") != "completed" or job.get("conclusion") != case["job_conclusion"]:
+    expected_conclusions = [case["job_conclusion"]]
+    if case.get("scenario") == "timeout":
+        # Self-hosted GitHub jobs can report cancelled for a timeout. Require
+        # GitHub's timeout annotation; never translate its conclusion ourselves.
+        expected_conclusions = ["timed_out", "cancelled"]
+        if not any("exceeded the maximum execution time" in a.get("message", "").lower()
+                   for a in case.get("annotations", [])):
+            errors.append("GitHub timeout annotation missing; cancellation alone does not prove timeout")
+    if job.get("status") != "completed" or job.get("conclusion") not in expected_conclusions:
         errors.append(f"unexpected job outcome: {job.get('status')}/{job.get('conclusion')}")
     runner = job.get("runner_name") or ""
     if case.get("cancel_phase") == "queued":
@@ -113,6 +121,16 @@ class GitHub:
                 return jobs
         raise RuntimeError("job pagination exceeded limit")
 
+    def annotations(self, job):
+        check_id = int(job["check_run_url"].rsplit("/", 1)[-1])
+        annotations = []
+        for page in range(1, 101):
+            batch = self.api(f"check-runs/{check_id}/annotations?per_page=100&page={page}")
+            annotations.extend(batch)
+            if len(batch) < 100:
+                return annotations
+        raise RuntimeError("annotation pagination exceeded limit")
+
 
 class Suite:
     def __init__(self, args):
@@ -154,7 +172,7 @@ class Suite:
         case = {"name": name, "scenario": scenario, "pool": pool, "attempt": 1,
                 "job_conclusion": conclusion, "run_conclusions": [conclusion], **extra}
         if conclusion == "timed_out":
-            case["run_conclusions"] = ["failure", "timed_out"]
+            case["run_conclusions"] = ["failure", "timed_out", "cancelled"]
         case["title"] = f"target/{self.suite}/{name}/{scenario}"
         self.report["cases"].append(case)
         self.save()  # Also retain dispatch intent if the API response is lost.
@@ -194,10 +212,27 @@ class Suite:
         while pending:
             for case in pending[:]:
                 run = self.gh.api(f"actions/runs/{case['run_id']}")
-                if run["run_attempt"] < case["attempt"] or run["status"] != "completed":
+                case["latest_run"] = run
+                if run["run_attempt"] < case["attempt"]:
+                    continue
+                if run["status"] != "completed":
+                    if seconds(run["created_at"], utcnow()) > self.args.queue_slo:
+                        jobs = self.gh.jobs(case["run_id"], case["attempt"])
+                        case["latest_jobs"] = jobs
+                        probe = next((j for j in jobs if j["name"] == "probe"), {})
+                        if (probe.get("status") == "queued" and not probe.get("runner_name") and
+                                seconds(probe.get("created_at"), utcnow()) > self.args.queue_slo):
+                            case["errors"] = ["queue SLO exceeded without a runner; cancelling stranded run"]
+                            self.save()
+                            self.gh.api(f"actions/runs/{case['run_id']}/cancel", "POST")
+                            pending.remove(case)
+                    self.save()
                     continue
                 case["run"] = run
                 case["jobs"] = self.gh.jobs(case["run_id"], case["attempt"])
+                if case.get("scenario") == "timeout":
+                    case["annotations"] = [a for job in case["jobs"] if job["name"] == "probe"
+                                           for a in self.gh.annotations(job)]
                 case["errors"] = grade(case, run, case["jobs"], self.args.queue_slo)
                 print(f"{case['name']}: {case['errors'] or 'PASS'}", flush=True)
                 pending.remove(case)
@@ -251,6 +286,8 @@ class Suite:
         self.wait(reruns)
         # Replay old job reads after reruns: their conclusions must remain intact.
         for case in first:
+            if "jobs" not in case:
+                continue  # A stranded/failed prerequisite has no final evidence to compare.
             jobs = self.gh.jobs(case["run_id"], 1)
             if [(j["id"], j["conclusion"]) for j in jobs] != [(j["id"], j["conclusion"]) for j in case["jobs"]]:
                 self.report["errors"].append(f"{case['name']}: first-attempt results changed after rerun")

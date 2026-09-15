@@ -4,12 +4,14 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from lifecycle_edges import GitHub, POOLS, REPO, Suite, grade, grade_identities
 from verify_lifecycle_state import SNAPSHOT_LUA, expected_jobs, grade_snapshot
+import verify_lifecycle_state
 
 
 def fixture():
@@ -47,14 +49,20 @@ class GitHubVerdictTests(unittest.TestCase):
             r.update(change)
             self.assertTrue(grade(c, r, [j], 600))
 
-    def test_timeout_requires_timed_out_job_not_just_failed_workflow(self):
+    def test_timeout_requires_github_timeout_evidence_and_preserves_its_conclusion(self):
         c, r, j = fixture()
-        c.update(job_conclusion="timed_out", run_conclusions=["failure", "timed_out"])
+        c.update(scenario="timeout", job_conclusion="timed_out", run_conclusions=["failure", "timed_out", "cancelled"])
         r["conclusion"] = "failure"
         j["conclusion"] = "failure"
         self.assertTrue(grade(c, r, [j], 600))
         j["conclusion"] = "timed_out"
+        self.assertTrue(grade(c, r, [j], 600))
+        c["annotations"] = [{"message": "The job has exceeded the maximum execution time of 1m0s"}]
         self.assertEqual([], grade(c, r, [j], 600))
+        r["conclusion"] = j["conclusion"] = "cancelled"
+        self.assertEqual([], grade(c, r, [j], 600))
+        c["annotations"] = [{"message": "The operation was canceled."}]
+        self.assertTrue(grade(c, r, [j], 600))
 
     def test_queued_cancel_that_raced_into_assignment_is_not_a_pass(self):
         c, r, j = fixture()
@@ -200,6 +208,46 @@ class StateVerdictTests(unittest.TestCase):
             report["cases"][0]["jobs"][0]["id"] = invalid
             with self.assertRaises(ValueError):
                 expected_jobs(report)
+
+
+class ObservationTests(unittest.TestCase):
+    def observe(self, snapshots, clock):
+        _, _, job = fixture()
+        report = {"repository": REPO, "passed": True, "cases": [{"jobs": [job]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report))
+            with patch.object(sys, "argv", ["verify", str(path), "--observe-seconds", "60"]), \
+                    patch.object(verify_lifecycle_state, "Staging") as staging, \
+                    patch("verify_lifecycle_state.time.monotonic", side_effect=clock), \
+                    patch("verify_lifecycle_state.time.sleep"), patch("builtins.print"):
+                staging.return_value.deployment.return_value = [{"image_id": "sha256:test"}]
+                staging.return_value.snapshot.side_effect = snapshots
+                rc = verify_lifecycle_state.main()
+            verdict = json.loads((Path(directory) / "state-verdict.json").read_text())
+            return rc, verdict
+
+    def test_convergence_is_not_a_pass_until_observation_finishes(self):
+        _, redis, pg = state_fixture()
+        rc, verdict = self.observe([(redis, pg), (redis, pg)], [0, 0, 61])
+        self.assertEqual(0, rc)
+        self.assertTrue(verdict["passed"])
+        self.assertEqual(2, len(verdict["samples"]))
+
+    def test_returning_demand_after_convergence_fails_immediately(self):
+        _, redis, pg = state_fixture()
+        dirty = copy.deepcopy(redis)
+        dirty[0]["memberships"] = [f"pending_allocation_requests:{POOLS[1]}"]
+        rc, verdict = self.observe([(redis, pg), (dirty, pg)], [0, 0, 30])
+        self.assertEqual(1, rc)
+        self.assertFalse(verdict["passed"])
+
+    def test_access_failure_after_clean_sample_cannot_be_green(self):
+        _, redis, pg = state_fixture()
+        rc, verdict = self.observe([(redis, pg), RuntimeError("read failed")], [0, 0])
+        self.assertEqual(1, rc)
+        self.assertFalse(verdict["passed"])
+        self.assertEqual(["read failed"], verdict["errors"])
 
 
 @unittest.skipUnless(os.environ.get("LIFECYCLE_TEST_REDIS_PORT"), "requires throwaway local Redis")

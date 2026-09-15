@@ -29,6 +29,7 @@ on:
 permissions:
   contents: read
   actions: write
+  checks: read
 
 concurrency:
   group: lifecycle-edges-${{ github.repository }}
