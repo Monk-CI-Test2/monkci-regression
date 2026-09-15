@@ -3,7 +3,7 @@ run-name: full-regression/${{ inputs.runner }}/${{ github.run_id }}
 
 # Runs every suite in order against one pool and summarises. Sequential on
 # purpose so the controller logs for each suite are easy to read apart.
-# Runtime: about 25 to 35 minutes.
+# Runtime: about 35 to 55 minutes with lifecycle edges.
 
 on:
   workflow_dispatch:

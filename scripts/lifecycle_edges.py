@@ -323,7 +323,9 @@ class Suite:
         for c in self.report["cases"]:
             result = "; ".join(c.get("errors", ["not graded"])) or "PASS"
             lines.append(f"| {c['name']} | {c['attempt']} | {result} | {c.get('run_id', '')} |")
-        lines += ["", *self.report["errors"], "", "GitHub verdict only. Run verify_lifecycle_state.py for Redis/Postgres reconciliation."]
+        lines += ["", *self.report["errors"], "",
+                  f"Workload window: {self.report['started_at']} to {self.report['ended_at']}",
+                  "GitHub verdict only. Run verify_lifecycle_state.py for Redis/Postgres reconciliation."]
         summary = "\n".join(lines) + "\n"
         (self.args.output / "summary.md").write_text(summary)
         if os.environ.get("GITHUB_STEP_SUMMARY"):

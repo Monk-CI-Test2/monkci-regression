@@ -22,13 +22,22 @@ KUBECTL = ["kubectl", "--context", "gke_monkcidev_us-central1_monkci-non-prod-us
 # No SCAN of unrelated jobs and no mutation commands. Explicit keys work with
 # the staging standalone Redis; EVAL_RO enforces the read-only contract (Redis 7).
 SNAPSHOT_LUA = r"""
+local function fields(source, names)
+  local out = {}
+  for _, name in ipairs(names) do out[name] = source[name] end
+  return out
+end
 local result = {}
 for _, item in ipairs(cjson.decode(ARGV[1])) do
   local marker = redis.call('GET', 'jobs:github_job_id:' .. tostring(item.job_id))
   local row = {job_id=item.job_id, marker=marker or cjson.null, memberships={}}
   if marker and string.sub(marker, 1, 10) ~= 'completed:' then
     local raw = redis.call('GET', 'jobs:details:' .. marker)
-    if raw then row.job = cjson.decode(raw) end
+    if raw then
+      row.job = fields(cjson.decode(raw), {'id','job_id','status','conclusion','label',
+        'assigned_vm_id','assignment_receipt_pending','recovery_count','recovery_exhausted',
+        'created_at','updated_at','assigned_at','started_at','completed_at'})
+    end
     for _, pool in ipairs(cjson.decode(ARGV[2])) do
       local queue = 'jobs:queue:' .. pool
       if redis.call('ZSCORE', queue, marker) then table.insert(row.memberships, queue) end
@@ -45,7 +54,9 @@ for _, item in ipairs(cjson.decode(ARGV[1])) do
   end
   if item.runner_name and item.runner_name ~= '' then
     local raw = redis.call('GET', 'vm:' .. item.runner_name)
-    if raw then row.actual_vm = cjson.decode(raw) end
+    if raw then
+      row.actual_vm = fields(cjson.decode(raw), {'vmId','state','migletState','jobId','updatedAt','lastHeartbeat'})
+    end
     row.actual_vm_memberships = {}
     for _, pool in ipairs(cjson.decode(ARGV[2])) do
       for _, state in ipairs({'warm','busy','completed'}) do
