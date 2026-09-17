@@ -475,8 +475,12 @@ class Experiment:
             if self.args.mode == "registration":
                 unlocks = [l for l in lines if l["message"] == "Registration lock timed out; returned job to VM_ALLOCATED for retry"]
                 self.check(len(unlocks) == MAX_RETRIES, f"registration lock timed out max_retries times before parking ({len(unlocks)} == {MAX_RETRIES})")
-                self.check(any(l["message"] == "Retired VM whose runner registration never completed" for l in lines),
-                           "controller retired the VM whose runner never registered")
+                # The silent VM is retired either by the registration bound itself or,
+                # if the 10-minute watchdog fires first, by the busy-VM release.
+                retired = any(l["message"] == "Retired VM whose runner registration never completed" for l in lines)
+                watchdog = any(l["event"] == "busy_vm_released_oom_restart" and l["vm_id"] == self.bait for l in lines)
+                self.check(retired or watchdog,
+                           f"controller retired the silent VM (registration bound={retired}, watchdog={watchdog})")
             else:
                 requeues = [l for l in lines if l["message"] == "VM allocation timed out, requeued"]
                 self.check(len(requeues) == MAX_RETRIES, f"allocation retried max_retries times before parking ({len(requeues)} == {MAX_RETRIES})")
