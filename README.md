@@ -77,7 +77,9 @@ served before it could be parked - re-run.
 claimable), so the job is bound to it and the register command is never answered:
 each registration-lock timeout counts as a retry, and after `max_retries` the job is
 parked and the silent VM retired (before that bound existed the job was re-sent the
-command every 5 minutes for 24 hours).
+command every 5 minutes for 24 hours). Expect exactly one `busy_vm_released_oom_restart`
+watchdog alert per registration-mode run: the bait VM is busy with an idle miglet for
+10 minutes by construction, and that is the watchdog's (pre-existing) wording for it.
 
 ```sh
 scripts/parked_recovery.py --pool monkci-ubuntu-24.04-4                      # allocation exhaustion

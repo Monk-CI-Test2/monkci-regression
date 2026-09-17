@@ -7,6 +7,7 @@ run-name: parked-recovery/${{ inputs.pool }}/${{ github.run_id }}
 # GitHub REST call - and that it completes. See scripts/parked_recovery.py.
 #
 # Staging only. A temporary VPC firewall rule starves EVERY staging pool of NATS for ~20 min; 25-35 minutes.
+# Registration mode also triggers one busy_vm_released_oom_restart watchdog alert by design (the bait VM).
 #
 # Needs GCP access that the hosted runner does not have by default. Add a repo
 # secret GCP_SA_KEY (JSON key of a monkcidev service account) with:
