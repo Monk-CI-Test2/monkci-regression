@@ -1,0 +1,83 @@
+name: 80-parked-recovery
+run-name: parked-recovery/${{ inputs.pool }}/${{ github.run_id }}
+
+# Forces one job into the controller's PARKED state with no job_executions row
+# (every pool VM is starved of NATS so nothing is ever claimable), then proves
+# the controller resumes it from the webhook-fed Postgres view - without any
+# GitHub REST call - and that it completes. See scripts/parked_recovery.py.
+#
+# Staging only. A temporary VPC firewall rule starves EVERY staging pool of NATS for ~20 min; 25-35 minutes.
+#
+# Needs GCP access that the hosted runner does not have by default. Add a repo
+# secret GCP_SA_KEY (JSON key of a monkcidev service account) with:
+#   roles/iap.tunnelResourceAccessor       IAP SSH to the bastion and pool VMs
+#   roles/compute.osAdminLogin             sudo on pool VMs (iptables)
+#   roles/compute.viewer                   list pool VMs
+#   roles/compute.securityAdmin            create/delete the temporary NATS-egress-deny firewall rule
+#   roles/container.clusterViewer + RBAC   read secret mig-controller-secrets in ns staging
+#   roles/logging.viewer                   controller logs
+# Until then run the script locally with the documented staging tunnel.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pool:
+        description: MonkCI pool label (staging)
+        type: string
+        default: monkci-ubuntu-24.04-4
+      mode:
+        description: allocation (no claimable VM) or registration (silent VM after claim)
+        type: choice
+        options: [allocation, registration]
+        default: allocation
+      confirm:
+        description: Type "park" to acknowledge this burns pool VMs in staging
+        type: string
+        required: true
+
+concurrency:
+  group: parked-recovery-${{ inputs.pool }}
+  cancel-in-progress: false
+
+jobs:
+  parked-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.REGRESSION_GH_TOKEN || github.token }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard rails
+        run: |
+          [[ "${{ inputs.confirm }}" == "park" ]] || { echo "::error::type 'park' in the confirm input"; exit 1; }
+          [[ -n "$GCP_SA_KEY" ]] || { echo "::error::GCP_SA_KEY secret is not configured; run scripts/parked_recovery.py locally (see README)"; exit 1; }
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: gke-gcloud-auth-plugin,kubectl
+
+      - name: Tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q redis-tools
+
+      - name: Staging tunnel
+        run: |
+          gcloud container clusters get-credentials monkci-non-prod-us-central1 --region us-central1 --project monkcidev
+          gcloud compute ssh monkci-non-prod-bastion --zone us-central1-a --project monkcidev --tunnel-through-iap --quiet \
+            -- -N -L 6443:172.16.0.2:443 -L 16378:10.71.134.3:6378 -L 15432:10.46.251.2:5432 &
+          for i in $(seq 1 40); do ss -ltn | grep -q ':16378 ' && break; sleep 2; done
+          ss -ltn | grep -E ':(6443|16378|15432) '
+
+      - name: Force a park and watch the resume
+        run: python3 scripts/parked_recovery.py --pool "${{ inputs.pool }}" --mode "${{ inputs.mode }}" --ref "${{ github.ref_name }}" --report parked-recovery-report.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parked-recovery-report
+          path: parked-recovery-report.json

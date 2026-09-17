@@ -58,6 +58,46 @@ scripts/runner-failure-tests.sh staging all
 scripts/runner-failure-tests.sh prod invariant     # read-only, safe on prod
 ```
 
+### Parked-job recovery (controller PR #123 paths)
+
+`scripts/parked_recovery.py` forces one job into the controller's PARKED state with
+**no `job_executions` row** and proves it comes back. It creates a VPC firewall rule
+that denies NATS egress for the pool VMs' service account, so every VM that boots
+fails its NATS connect, never reports READY and is never claimable (the rule precedes
+the boot, so there is no per-VM race); the pool's existing warm VMs are deleted first
+and the script waits until the controller no longer lists them warm. With nothing
+claimable the job's allocation times out `max_retries` times and it is parked by
+`parkAfterSchedulingExhaustion` - it never registered, so no row exists. The rule is
+then deleted, miglets restarted, and the script waits for `parked_job_resumed` (5 min
+delay, `resume_count=1`, decided from Postgres only - no GitHub REST call), the
+completion, and GitHub/Redis/Postgres agreement. Staging only; **the rule starves every
+staging pool while it exists (~20 min)**; 25-35 minutes. Exit 3 means the job was
+served before it could be parked - re-run.
+`--mode registration` instead first starves one READY warm VM with iptables (it stays
+claimable), so the job is bound to it and the register command is never answered:
+each registration-lock timeout counts as a retry, and after `max_retries` the job is
+parked and the silent VM retired (before that bound existed the job was re-sent the
+command every 5 minutes for 24 hours).
+
+```sh
+scripts/parked_recovery.py --pool monkci-ubuntu-24.04-4                      # allocation exhaustion
+scripts/parked_recovery.py --pool monkci-ubuntu-24.04-4 --mode registration  # silent VM after claim
+# from GitHub, once the GCP_SA_KEY secret exists (see the workflow header):
+gh workflow run 80-parked-recovery.yml -R Monk-CI-Test2/monkci-regression -f pool=monkci-ubuntu-24.04-4 -f confirm=park
+```
+
+### Window audit
+
+`scripts/audit_window.py --since <UTC>` reconciles every pool job of every run created
+since the timestamp against Redis (record, index memberships, VM ownership) and
+`job_executions`. `ok` means all three agree and are terminal; `redis_tombstone`
+means GitHub finished a job the controller never enqueued (skipped, or cancelled
+before the queued webhook) - expected; `bad` lists the reasons. Run it after any suite.
+
+```sh
+scripts/audit_window.py --since 2026-09-16T15:39:40Z
+```
+
 ## Run
 
 ```sh
