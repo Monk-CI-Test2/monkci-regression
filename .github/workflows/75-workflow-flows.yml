@@ -1,0 +1,55 @@
+name: 75 Workflow Flows
+run-name: workflow-flows/${{ inputs.runner }}/${{ github.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Primary staging pool
+        type: choice
+        default: monkci-ubuntu-24.04-4
+        options: [monkci-ubuntu-24.04-2, monkci-ubuntu-24.04-4, monkci-ubuntu-24.04-8]
+      second_pool:
+        description: Optional different pool for concurrent routing
+        type: choice
+        default: none
+        options: [none, monkci-ubuntu-24.04-2, monkci-ubuntu-24.04-4, monkci-ubuntu-24.04-8]
+      queue_slo:
+        description: Maximum queue seconds after dependencies become eligible (180 to test the three-minute SLO)
+        type: number
+        default: 180
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: workflow-flows-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ secrets.REGRESSION_GH_TOKEN || github.token }}
+      WORKFLOW_REF: ${{ github.ref_name }}
+      POOL: ${{ inputs.runner }}
+      SECOND_POOL: ${{ inputs.second_pool }}
+      QUEUE_SLO: ${{ inputs.queue_slo }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise workflow flows
+        run: |
+          args=(--ref "$WORKFLOW_REF" --pool "$POOL" --queue-slo "$QUEUE_SLO" --output .flow-regressions/run)
+          if [[ "$SECOND_POOL" != none ]]; then args+=(--second-pool "$SECOND_POOL"); fi
+          python3 scripts/flow_regressions.py "${args[@]}"
+      - name: Upload exact job evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-flows-${{ github.run_id }}
+          path: .flow-regressions/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

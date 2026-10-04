@@ -28,6 +28,10 @@ on:
         description: Also test reruns, timeouts, exact outcomes and cancellation phases
         default: true
         type: boolean
+      include_workflow_flows:
+        description: Also test dependencies, matrices, long jobs and failed-only reruns
+        default: true
+        type: boolean
       chaos_runs:
         description: Chaos run count when include_chaos is set
         default: 12
@@ -63,6 +67,9 @@ jobs:
           if [[ "${{ inputs.include_lifecycle_edges }}" == "true" ]]; then
             run lifecycle-edges 70-lifecycle-edges.yml -f runner="$RUNNER"
           fi
+          if [[ "${{ inputs.include_workflow_flows }}" == "true" ]]; then
+            run workflow-flows 75-workflow-flows.yml -f runner="$RUNNER"
+          fi
           if [[ "${{ inputs.include_docker_cache }}" == "true" ]]; then
             run docker-cache 50-docker-cache-example.yml -f runner="$RUNNER" -f salt="r$GITHUB_RUN_ID"
           fi
@@ -75,7 +82,7 @@ jobs:
             echo ""
             echo "| suite | result | run |"
             echo "|---|---|---|"
-            for k in smoke fast-jobs cancel-matrix queue-pressure lifecycle-edges docker-cache lag-chaos; do
+            for k in smoke fast-jobs cancel-matrix queue-pressure lifecycle-edges workflow-flows docker-cache lag-chaos; do
               [[ -n "${RES[$k]:-}" ]] || continue
               r="${RES[$k]}"; echo "| $k | ${r%% *} | ${r#* } |"
             done

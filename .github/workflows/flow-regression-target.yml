@@ -1,0 +1,150 @@
+name: Flow Regression Target
+run-name: flows/${{ inputs.suite_id }}/${{ inputs.case_id }}/${{ inputs.scenario }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite_id:
+        type: string
+        required: true
+      case_id:
+        type: string
+        required: true
+      scenario:
+        type: choice
+        options: [graph, failures, matrix, long, cross_pool, fail_once_matrix]
+        required: true
+      runner_label:
+        type: string
+        default: monkci-ubuntu-24.04-4
+      second_pool:
+        type: string
+        default: monkci-ubuntu-24.04-2
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    if: inputs.scenario == 'graph'
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    outputs:
+      token: ${{ steps.output.outputs.token }}
+    steps:
+      - id: output
+        run: echo 'token=seed-value' >> "$GITHUB_OUTPUT"
+  left:
+    if: inputs.scenario == 'graph'
+    needs: seed
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    env:
+      TOKEN: ${{ needs.seed.outputs.token }}
+    outputs:
+      token: ${{ steps.output.outputs.token }}
+    steps:
+      - id: output
+        run: |
+          test "$TOKEN" = seed-value
+          test ! -e "$RUNNER_TEMP/regression-private-marker"
+          touch "$RUNNER_TEMP/regression-private-marker"
+          echo 'token=left-value' >> "$GITHUB_OUTPUT"
+  right:
+    if: inputs.scenario == 'graph'
+    needs: seed
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    steps:
+      - run: sleep 5
+  join:
+    if: inputs.scenario == 'graph'
+    needs: [left, right]
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    env:
+      TOKEN: ${{ needs.left.outputs.token }}
+    steps:
+      - run: |
+          test "$TOKEN" = left-value
+          test ! -e "$RUNNER_TEMP/regression-private-marker"
+  prerequisite:
+    if: inputs.scenario == 'failures'
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    steps:
+      - run: exit 42
+  skipped:
+    if: inputs.scenario == 'failures'
+    needs: prerequisite
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    steps:
+      - run: echo 'this must never run'
+  cleanup:
+    if: always() && inputs.scenario == 'failures'
+    needs: [prerequisite, skipped]
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    env:
+      RESULT: ${{ needs.prerequisite.result }}
+      SKIPPED: ${{ needs.skipped.result }}
+    steps:
+      - run: test "$RESULT" = failure && test "$SKIPPED" = skipped
+  soft_failure:
+    if: inputs.scenario == 'failures'
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    steps:
+      - id: deliberate
+        continue-on-error: true
+        run: exit 42
+      - env:
+          OUTCOME: ${{ steps.deliberate.outcome }}
+          CONCLUSION: ${{ steps.deliberate.conclusion }}
+        run: test "$OUTCOME" = failure && test "$CONCLUSION" = success
+  after_soft_failure:
+    if: inputs.scenario == 'failures'
+    needs: soft_failure
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    steps:
+      - run: echo 'continued successfully'
+  shard:
+    if: inputs.scenario == 'matrix' || inputs.scenario == 'fail_once_matrix'
+    name: shard-${{ matrix.shard }}
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    env:
+      SHARD: ${{ matrix.shard }}
+      SCENARIO: ${{ inputs.scenario }}
+    steps:
+      - run: |
+          sleep "$((SHARD + 1))"
+          if [[ "$SCENARIO" == matrix && "$SHARD" =~ ^(1|4)$ ]]; then exit 42; fi
+          if [[ "$SCENARIO" == fail_once_matrix && "$SHARD" == 1 && "$GITHUB_RUN_ATTEMPT" == 1 ]]; then exit 42; fi
+  long:
+    if: inputs.scenario == 'long'
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 15
+    steps:
+      - run: |
+          # Exceeds the historical five-minute busy-READY cleanup threshold.
+          for i in $(seq 1 37); do echo "still-running-$i"; sleep 10; done
+  primary:
+    if: inputs.scenario == 'cross_pool'
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    steps:
+      - run: sleep 3
+  secondary:
+    if: inputs.scenario == 'cross_pool'
+    runs-on: ${{ inputs.second_pool }}
+    timeout-minutes: 10
+    steps:
+      - run: sleep 3

@@ -143,3 +143,7 @@ the fix doing its work during `20-fast-jobs`.
   should register runners for these jobs; if runners from another environment
   pick jobs up, the queue-wait numbers are still valid but the log verdict is
   not, because it only reads staging.
+
+## Readiness and recovery regressions
+
+Workflows **06 Source Contracts** and **75 Workflow Flows** add source-level race/state-machine checks and multi-job live coverage for the Olive delay mitigation. Workflow 00 includes the new live suite by default. See [coverage, setup and exact-ref validation](docs/readiness-regressions.md). The source workflow requires `SOURCE_READ_TOKEN` with read access to all three private source repos.

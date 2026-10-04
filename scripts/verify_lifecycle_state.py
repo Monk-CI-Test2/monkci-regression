@@ -35,7 +35,7 @@ for _, item in ipairs(cjson.decode(ARGV[1])) do
     local raw = redis.call('GET', 'jobs:details:' .. marker)
     if raw then
       row.job = fields(cjson.decode(raw), {'id','job_id','status','conclusion','label',
-        'assigned_vm_id','assignment_receipt_pending','recovery_count','recovery_exhausted',
+        'assigned_vm_id','assignment_receipt_pending','retry_count','max_retries','recovery_exhausted',
         'created_at','updated_at','assigned_at','started_at','completed_at'})
     end
     for _, pool in ipairs(cjson.decode(ARGV[2])) do
@@ -43,7 +43,7 @@ for _, item in ipairs(cjson.decode(ARGV[1])) do
       if redis.call('ZSCORE', queue, marker) then table.insert(row.memberships, queue) end
       local pending = 'pending_allocation_requests:' .. pool
       if redis.call('SISMEMBER', pending, marker) == 1 then table.insert(row.memberships, pending) end
-      for _, state in ipairs({'QUEUED','PENDING_ALLOCATION','VM_ALLOCATED','REGISTERING','ASSIGNED'}) do
+      for _, state in ipairs({'QUEUED','PENDING_ALLOCATION','VM_ALLOCATED','REGISTERING','RETIRING','ASSIGNED'}) do
         local key = 'jobs:by_schedule:' .. pool .. ':' .. state
         if redis.call('SISMEMBER', key, marker) == 1 then table.insert(row.memberships, key) end
       end
@@ -55,11 +55,11 @@ for _, item in ipairs(cjson.decode(ARGV[1])) do
   if item.runner_name and item.runner_name ~= '' then
     local raw = redis.call('GET', 'vm:' .. item.runner_name)
     if raw then
-      row.actual_vm = fields(cjson.decode(raw), {'vmId','state','migletState','jobId','updatedAt','lastHeartbeat'})
+      row.actual_vm = fields(cjson.decode(raw), {'vmId','state','migletState','jobId','updatedAt','lastHeartbeat','warmSinceMs','lastHeartbeatSourceMs','lastStateSourceMs','retirementRequested'})
     end
     row.actual_vm_memberships = {}
     for _, pool in ipairs(cjson.decode(ARGV[2])) do
-      for _, state in ipairs({'warm','busy','completed'}) do
+      for _, state in ipairs({'warm','busy','completed','pending_delete','warm:onDemand','warm:reserved','busy:onDemand','busy:reserved','completed:onDemand','completed:reserved'}) do
         local key = 'pool:' .. string.gsub(pool, '^monkci%-', '') .. ':' .. state
         if redis.call('SISMEMBER', key, item.runner_name) == 1 then
           table.insert(row.actual_vm_memberships, key)
@@ -79,7 +79,11 @@ def expected_jobs(report):
     result = {}
     for case in report["cases"]:
         for job in case.get("jobs", []):
-            if job.get("name") != "probe":
+            if report.get("suite_type") == "workflow_flows":
+                from flow_regressions import expectations
+                if job.get("name") not in expectations(case["scenario"], case["attempt"]) or job.get("conclusion") == "skipped":
+                    continue
+            elif job.get("name") != "probe":
                 continue
             if job.get("status") != "completed" or not job.get("conclusion"):
                 raise ValueError("report contains an unfinished job")
@@ -123,7 +127,7 @@ def grade_snapshot(expected, redis_rows, pg_rows):
         # job: the latter may legitimately still be serving a different job.
         actual = r.get("actual_vm", {})
         if actual.get("state") in ("busy", "warm") or any(
-                key.endswith((":busy", ":warm")) for key in r.get("actual_vm_memberships", [])):
+                key.endswith((":busy", ":warm", ":busy:onDemand", ":busy:reserved", ":warm:onDemand", ":warm:reserved")) for key in r.get("actual_vm_memberships", [])):
             errors.append(prefix + "actual ephemeral runner VM was not retired")
     return errors
 
