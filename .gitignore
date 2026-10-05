@@ -1,2 +1,5 @@
 __pycache__/
 .lifecycle-edges/
+
+.source-contracts/
+.flow-regressions/

@@ -1,0 +1,85 @@
+name: 06 Source Contracts
+run-name: source-contracts/${{ inputs.controller_ref }}/${{ github.run_id }}
+
+# Source repos are private. SOURCE_READ_TOKEN must have read access to all three.
+# Always select the exact fix refs; the regression repo does not deploy services.
+on:
+  workflow_dispatch:
+    inputs:
+      controller_ref:
+        description: Controller branch or SHA containing the coordinated fix
+        type: string
+        required: true
+      custom_mig_ref:
+        description: Custom MIG branch or SHA containing the coordinated fix
+        type: string
+        required: true
+      miglet_ref:
+        description: MIGlet branch or SHA containing the coordinated fix
+        type: string
+        required: true
+      race:
+        description: Also run the race detector on changed concurrency paths
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: regression
+      - name: Check private source access
+        env:
+          SOURCE_TOKEN: ${{ secrets.SOURCE_READ_TOKEN }}
+        run: test -n "$SOURCE_TOKEN" || { echo 'Set SOURCE_READ_TOKEN with read access to the three source repositories'; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          repository: MonkCi-Inc/monkci-core-mig-controller
+          ref: ${{ inputs.controller_ref }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          persist-credentials: false
+          path: controller
+      - uses: actions/checkout@v4
+        with:
+          repository: MonkCi-Inc/monkci-core-custom-mig
+          ref: ${{ inputs.custom_mig_ref }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          persist-credentials: false
+          path: custom-mig
+      - uses: actions/checkout@v4
+        with:
+          repository: MonkCi-Inc/monkci-core-miglet-agent
+          ref: ${{ inputs.miglet_ref }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          persist-credentials: false
+          path: miglet
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: custom-mig/go.mod
+          cache-dependency-path: |
+            controller/go.sum
+            custom-mig/go.sum
+            miglet/go.sum
+      - name: Run central contracts and older package tests
+        working-directory: regression
+        env:
+          RACE: ${{ inputs.race }}
+        run: |
+          args=(--controller ../controller --custom-mig ../custom-mig --miglet ../miglet --output .source-contracts/run)
+          if [[ "$RACE" == true ]]; then args+=(--race); fi
+          python3 scripts/source_contracts.py "${args[@]}"
+      - name: Upload source revisions and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-contracts-${{ github.run_id }}
+          path: regression/.source-contracts/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
