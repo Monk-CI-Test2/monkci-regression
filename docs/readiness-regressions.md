@@ -71,7 +71,7 @@ include only executions, not successful jobs retained by a failed-only rerun.
 | Continued step failure | Failed step retains its failure outcome, the job continues successfully, and its dependent job executes |
 | Mixed matrix | Six shards with fail-fast disabled: two fail, four succeed; siblings cannot disappear when one shard fails |
 | Long job | Runs for at least 365 seconds, crossing the historical five-minute busy-READY cleanup threshold without being killed |
-| Failed-only matrix rerun | One failed shard reruns on a new job ID and ephemeral runner; five successful shards and first-attempt evidence remain unchanged |
+| Failed-only matrix rerun | One failed shard reruns on a new job ID and ephemeral runner; five successful shards retain their execution evidence, even when GitHub clones their API records; first-attempt evidence remains unchanged |
 | Optional two pools | Concurrent primary and secondary jobs execute on the correct pool |
 | Final clean graph | New work executes after failures and rerun without old work reclaiming its runners |
 

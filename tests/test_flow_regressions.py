@@ -104,7 +104,30 @@ class FlowVerdictTests(unittest.TestCase):
                 bad = {**redo, **mutation}
                 self.assertTrue(grade_flow(c, r, [bad], 180))
         changed = {**prior[0], 'id': 555}
-        self.assertTrue(grade_flow(c, r, [redo, changed], 180))
+        self.assertEqual([], grade_flow(c, r, [redo, changed], 180))
+
+    def test_github_cloned_successes_preserve_execution_not_api_record_identity(self):
+        first, _, prior = fixture('fail_once_matrix')
+        c, r, _ = fixture('fail_once_matrix', 2)
+        c['previous_jobs'] = {j['name']: j for j in prior}
+        copies = copy.deepcopy(prior)
+        for job in copies:
+            job.update(id=job['id'] + 1000, run_attempt=2, created_at='2026-10-04T10:30:00Z')
+        copies[1].update(conclusion='success', runner_name='monkci--ubuntu-24-04-4--replacement',
+                         started_at='2026-10-04T10:30:05Z', completed_at='2026-10-04T10:30:10Z')
+        self.assertEqual([], grade_flow(c, r, copies, 180))
+        cases = [{**first, 'jobs': prior}, {**c, 'jobs': copies}]
+        self.assertEqual([], grade_unique(cases))
+        report = {'repository': REPO, 'suite_type': 'workflow_flows', 'passed': True, 'cases': cases}
+        self.assertEqual({j['id'] for j in prior} | {copies[1]['id']}, {j['job_id'] for j in expected_jobs(report)})
+        for mutation in ({'started_at': '2026-10-04T10:30:05Z'}, {'completed_at': '2026-10-04T10:30:10Z'},
+                         {'steps': [{'name': 'executed again'}]}, {'runner_name': copies[0]['runner_name'] + '-new'}):
+            with self.subTest(mutation=mutation):
+                changed = copy.deepcopy(copies)
+                changed[0].update(mutation)
+                self.assertTrue(grade_flow(c, r, changed, 180))
+                with self.assertRaises(ValueError):
+                    expected_jobs({**report, 'cases': [{**c, 'jobs': changed}]})
 
     def test_duplicate_runners_and_job_ids_across_flows_fail(self):
         c, _, jobs = fixture()
