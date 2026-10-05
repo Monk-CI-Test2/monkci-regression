@@ -11,6 +11,16 @@ from urllib.parse import urlencode
 from lifecycle_edges import GitHub, POOLS, REPO, Suite, seconds, utcnow
 
 WORKFLOW = "flow-regression-target.yml"
+
+
+def same_execution(job, previous):
+    # GitHub clones successful jobs into the new attempt with new API IDs and
+    # created_at. Execution evidence, rather than those record fields, proves
+    # that the successful shard was carried forward without running again.
+    fields = ("status", "conclusion", "runner_name", "runner_id", "runner_group_id",
+              "runner_group_name", "labels", "started_at", "completed_at", "steps")
+    return all(job.get(field) == previous.get(field) for field in fields)
+
 DEPENDENCIES = {"left": ["seed"], "right": ["seed"], "join": ["left", "right"],
                 "skipped": ["prerequisite"], "cleanup": ["prerequisite", "skipped"],
                 "after_soft_failure": ["soft_failure"]}
@@ -70,7 +80,7 @@ def grade_flow(case, run, jobs, slo):
             continue
         previous = prior.get(name)
         if previous and previous["conclusion"] == "success":
-            if job != previous:
+            if not same_execution(job, previous):
                 errors.append(prefix + "failed-only rerun changed an unaffected successful job")
         elif job.get("run_attempt") != case["attempt"]:
             errors.append(prefix + "wrong job attempt")
@@ -82,7 +92,7 @@ def grade_flow(case, run, jobs, slo):
         if pool not in job.get("labels", []) or not (job.get("runner_name") or "").startswith(runner_prefix):
             errors.append(prefix + "wrong or missing pool/runner")
         try:
-            created = job["created_at"]
+            created = previous["created_at"] if previous and previous["conclusion"] == "success" else job["created_at"]
             eligible = [created] + [actual[d]["completed_at"] for d in DEPENDENCIES.get(name, []) if actual[d].get("completed_at")]
             eligible_at = max(eligible, key=lambda x: datetime.fromisoformat(x.replace("Z", "+00:00")))
             queue = seconds(eligible_at, job.get("started_at"))
@@ -105,6 +115,10 @@ def grade_unique(cases):
                 continue
             identity = (case["run_id"], job.get("name"))
             jid, runner = job.get("id"), job.get("runner_name")
+            previous = case.get("previous_jobs", {}).get(job.get("name"))
+            if previous and previous.get("conclusion") == "success" and same_execution(job, previous):
+                job = previous
+                jid, runner = job.get("id"), job.get("runner_name")
             # Same successful job retained by a failed-only rerun is intentional.
             if jid in ids and ids[jid] == identity:
                 continue

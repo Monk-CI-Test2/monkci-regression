@@ -80,9 +80,14 @@ def expected_jobs(report):
     for case in report["cases"]:
         for job in case.get("jobs", []):
             if report.get("suite_type") == "workflow_flows":
-                from flow_regressions import expectations
+                from flow_regressions import expectations, same_execution
                 if job.get("name") not in expectations(case["scenario"], case["attempt"]) or job.get("conclusion") == "skipped":
                     continue
+                previous = case.get("previous_jobs", {}).get(job.get("name"))
+                if previous and previous.get("conclusion") == "success":
+                    if not same_execution(job, previous):
+                        raise ValueError("carried-forward successful job changed execution evidence")
+                    job = previous
             elif job.get("name") != "probe":
                 continue
             if job.get("status") != "completed" or not job.get("conclusion"):
