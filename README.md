@@ -8,6 +8,11 @@ run `scripts/verify-staging-logs.sh` for the controller-side verdict.
 Each suite is a `workflow_dispatch` so nothing runs by accident. Orchestrators run
 on `ubuntu-latest` so they never consume pool capacity themselves.
 
+For this allocation fix, use the existing `20-fast-jobs.yml` on the
+`allotment-time-fix` branch with `count=100` and `workload=mixed` or `fast`.
+It grades complete coverage and queue-time quantiles and can compare a matching
+baseline run. See [100-job allotment validation](docs/allotment-time.md).
+
 | Suite | What it proves | Runtime |
 |---|---|---|
 | `10-smoke.yml` | One ordinary job gets a VM, runs, completes. Baseline. | 2 to 4 min |

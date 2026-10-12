@@ -3,3 +3,4 @@ __pycache__/
 
 .source-contracts/
 .flow-regressions/
+.allotment/
