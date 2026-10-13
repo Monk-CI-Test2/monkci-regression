@@ -57,6 +57,10 @@ The baseline is read from its `allotment-RUN_ID-attempt-*` artifact; an old work
 run without this measurement artifact cannot be used. Pool, count, and runtime
 pattern must match. Choose a run that was not rerun, or download the intended
 attempt's report and compare locally using `--baseline-report`.
+An otherwise valid baseline may have failed the latency SLO. The grader verifies
+its original jobs and recorded metrics before comparison and preserves its
+original failure in the report. Failed or incomplete workload coverage cannot
+serve as a baseline; the candidate must still pass the 600-second guard.
 
 Download the artifact from the Actions run. After convergence, run the existing
 read-only staging log and window audits to check that completed jobs never

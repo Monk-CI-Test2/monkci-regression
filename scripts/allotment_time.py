@@ -28,14 +28,14 @@ def quantile(values, q):
 
 
 def grade(jobs, pool, count, workload, max_queue, attempt=1):
-    errors, rows, ids, runners = [], [], set(), set()
+    errors, slo_errors, rows, ids, runners = [], [], [], set(), set()
     plans = [j for j in jobs if j.get("name") == "plan"]
     try:
         if len(plans) != 1 or plans[0].get("conclusion") != "success":
             raise ValueError("missing or unsuccessful plan")
         eligible = timestamp(plans[0]["completed_at"])
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
-        return {"errors": [str(exc)], "rows": [], "metrics": None}
+        return {"errors": [str(exc)], "validity_errors": [str(exc)], "slo_errors": [], "rows": [], "metrics": None}
     expected = {f"fast-{i}" for i in range(1, count + 1)}
     probes = [j for j in jobs if str(j.get("name", "")).startswith("fast-")]
     if len(probes) != count or {j.get("name") for j in probes} != expected:
@@ -62,7 +62,7 @@ def grade(jobs, pool, count, workload, max_queue, attempt=1):
             if wait < 0 or duration < 0:
                 raise ValueError("negative elapsed time")
             if wait > max_queue:
-                errors.append(f"{name}: {wait}s wait exceeds {max_queue}s")
+                slo_errors.append(f"{name}: {wait}s wait exceeds {max_queue}s")
             shard = int(re.fullmatch(r"fast-(\d+)", name).group(1))
             hold = (0, 3, 15, 30)[(shard - 1) % 4] if workload == "mixed" else 0
             if duration < hold:
@@ -78,7 +78,26 @@ def grade(jobs, pool, count, workload, max_queue, attempt=1):
         metrics = {"n": len(waits), "mean": statistics.mean(waits), "max": max(waits),
                    **{f"p{q}": quantile(waits, q / 100) for q in (50, 90, 95, 99)},
                    **{f"over_{limit}s": sum(w > limit for w in waits) for limit in (90, 180, 300)}}
-    return {"errors": errors, "rows": rows, "metrics": metrics}
+    return {"errors": errors + slo_errors, "validity_errors": errors, "slo_errors": slo_errors,
+            "rows": rows, "metrics": metrics}
+
+
+def baseline_validity_errors(baseline):
+    # Re-grade original job evidence for legacy reports whose single error list
+    # combined workload validity and latency SLOs. A slow, otherwise valid run
+    # is precisely the baseline a latency fix needs; retain its original errors.
+    if "raw_jobs" in baseline:
+        try:
+            workload = baseline["workload"]
+            checked = grade(baseline["raw_jobs"], workload["pool"], workload["count"],
+                            workload["pattern"], math.inf, baseline["run_attempt"])
+            errors = list(checked["validity_errors"])
+            if checked["metrics"] != baseline["metrics"]:
+                errors.append("baseline metrics differ from its original job evidence")
+            return errors
+        except (KeyError, TypeError, ValueError) as exc:
+            return [f"invalid baseline evidence: {exc}"]
+    return baseline.get("validity_errors", baseline["errors"])
 
 
 def compare(candidate, baseline):
@@ -87,7 +106,7 @@ def compare(candidate, baseline):
         errors.append("baseline pool/count/runtime pattern differs")
     if candidate["run_id"] == baseline["run_id"]:
         errors.append("baseline and candidate must be different runs")
-    if candidate["errors"] or baseline["errors"] or not candidate["metrics"] or not baseline["metrics"]:
+    if candidate["errors"] or baseline_validity_errors(baseline) or not candidate["metrics"] or not baseline["metrics"]:
         errors.append("both runs require complete, valid workload coverage")
     if errors:
         return {"accepted": False, "errors": errors, "deltas_seconds": {}}
@@ -128,7 +147,7 @@ def main():
     if not 1 <= args.count <= 100 or args.max_queue <= 0:
         parser.error("count must be 1..100 and max queue must be positive")
     gh = GitHub()
-    report = {"schema": 1, "repository": REPO, "build_id": args.build_id,
+    report = {"schema": 2, "repository": REPO, "build_id": args.build_id,
               "metric": "GitHub eligible-to-start; differs from backend accepted-to-start dashboard",
               "comparison": None, "errors": [], "metrics": None}
     try:
@@ -153,7 +172,8 @@ def main():
             baseline = None
         if baseline is not None:
             report["comparison"] = compare(report, baseline)
-            report["baseline"] = {k: baseline[k] for k in ("run_id", "build_id", "head_sha", "metrics", "workload")}
+            report["baseline"] = {k: baseline[k] for k in ("run_id", "build_id", "head_sha", "metrics", "workload", "errors")}
+            report["baseline"]["validity_errors"] = baseline_validity_errors(baseline)
     except Exception as exc:
         report["errors"].append(str(exc))
     args.output.parent.mkdir(parents=True, exist_ok=True)

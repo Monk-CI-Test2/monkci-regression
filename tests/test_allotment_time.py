@@ -68,3 +68,27 @@ class AllotmentTests(unittest.TestCase):
                 elif mutation == "same_run": c["run_id"] = 1
                 else: c["metrics"][mutation] = baseline["metrics"][mutation] + 1
                 self.assertFalse(compare(c, baseline)["accepted"])
+
+    def test_slow_legacy_baseline_requires_valid_original_evidence(self):
+        jobs = fixture()
+        baseline = dict(grade(jobs, POOL, 100, "mixed", 90), run_id=1, run_attempt=1,
+                        raw_jobs=jobs, workload={"pool": POOL, "count": 100, "pattern": "mixed"})
+        del baseline["validity_errors"]
+        del baseline["slo_errors"]
+        candidate = dict(grade(jobs, POOL, 100, "mixed", 600), run_id=2,
+                         workload=copy.deepcopy(baseline["workload"]))
+        for key in ("mean", "p50", "p90", "p95", "p99", "max"):
+            candidate["metrics"][key] /= 2
+        self.assertTrue(baseline["errors"])
+        self.assertTrue(compare(candidate, baseline)["accepted"])
+        self.assertTrue(baseline["errors"], "original failed SLO must be preserved")
+        for mutation in ("missing", "failure", "metrics", "missing_evidence"):
+            with self.subTest(mutation=mutation):
+                invalid = copy.deepcopy(baseline)
+                if mutation == "missing": invalid["raw_jobs"].pop()
+                elif mutation == "failure": invalid["raw_jobs"][1]["conclusion"] = "failure"
+                elif mutation == "metrics": invalid["metrics"]["mean"] += 1
+                else: del invalid["raw_jobs"]
+                self.assertFalse(compare(candidate, invalid)["accepted"])
+        candidate["errors"] = ["candidate SLO failed"]
+        self.assertFalse(compare(candidate, baseline)["accepted"])
