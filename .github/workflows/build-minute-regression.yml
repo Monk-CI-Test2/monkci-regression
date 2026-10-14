@@ -1,0 +1,62 @@
+name: Staging build-minute regression
+run-name: staging-build-minutes/${{ github.run_id }}
+on:
+  push:
+    branches: [build-minutes-validation-20261015]
+permissions:
+  contents: read
+jobs:
+  timed:
+    name: minutes-${{ matrix.case }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 19
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - case: long-2cpu
+            runner: monkci-ubuntu-24.04-2
+            seconds: 900
+          - case: long-4cpu
+            runner: monkci-ubuntu-24.04-4
+            seconds: 600
+          - case: long-8cpu
+            runner: monkci-ubuntu-24.04-8
+            seconds: 300
+          - case: short-2cpu
+            runner: monkci-ubuntu-24.04-2
+            seconds: 20
+          - case: short-4cpu
+            runner: monkci-ubuntu-24.04-4
+            seconds: 45
+          - case: short-8cpu
+            runner: monkci-ubuntu-24.04-8
+            seconds: 60
+    steps:
+      - name: Timed runner occupancy
+        shell: bash
+        env:
+          HOLD_SECONDS: ${{ matrix.seconds }}
+          CASE_NAME: ${{ matrix.case }}
+        run: |
+          set -euo pipefail
+          [[ "$RUNNER_NAME" == monkci--* ]]
+          start=$(date -u +%FT%TZ)
+          echo "case=$CASE_NAME runner=$RUNNER_NAME started=$start requested_seconds=$HOLD_SECONDS"
+          remaining=$HOLD_SECONDS
+          while (( remaining > 0 )); do
+            chunk=$(( remaining < 30 ? remaining : 30 ))
+            sleep "$chunk"
+            remaining=$((remaining - chunk))
+            echo "case=$CASE_NAME remaining_seconds=$remaining"
+          done
+          end=$(date -u +%FT%TZ)
+          echo "case=$CASE_NAME finished=$end"
+          {
+            echo "case=$CASE_NAME"
+            echo "runner=$RUNNER_NAME"
+            echo "step_start=$start"
+            echo "step_end=$end"
+            echo "requested_seconds=$HOLD_SECONDS"
+          } >> "$GITHUB_STEP_SUMMARY"
