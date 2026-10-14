@@ -1,0 +1,59 @@
+name: Staging policy gate validation
+run-name: policy-gate/${{ github.run_id }}
+'on':
+  push:
+    branches:
+    - policy-gate-validation-20261015
+permissions:
+  contents: read
+jobs:
+  cold-2cpu:
+    name: cold-2cpu
+    runs-on: monkci-ubuntu-24.04-2
+    timeout-minutes: 10
+    steps:
+    - name: Exercise admitted build and completion
+      shell: bash
+      run: 'set -euo pipefail
+
+        [[ "$RUNNER_NAME" == monkci--* ]]
+
+        echo "policy admission verified on $RUNNER_NAME"
+
+        sleep 30
+
+        '
+  cached-4cpu:
+    name: cached-4cpu
+    runs-on: monkci-ubuntu-24.04-4
+    timeout-minutes: 10
+    steps:
+    - name: Exercise admitted build and completion
+      shell: bash
+      run: 'set -euo pipefail
+
+        [[ "$RUNNER_NAME" == monkci--* ]]
+
+        echo "policy admission verified on $RUNNER_NAME"
+
+        sleep 30
+
+        '
+    needs: cold-2cpu
+  cached-8cpu:
+    name: cached-8cpu
+    runs-on: monkci-ubuntu-24.04-8
+    timeout-minutes: 10
+    steps:
+    - name: Exercise admitted build and completion
+      shell: bash
+      run: 'set -euo pipefail
+
+        [[ "$RUNNER_NAME" == monkci--* ]]
+
+        echo "policy admission verified on $RUNNER_NAME"
+
+        sleep 30
+
+        '
+    needs: cached-4cpu
