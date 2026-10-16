@@ -1,0 +1,32 @@
+name: Staging fairness validation
+run-name: staging-fairness-validation-20261016
+on:
+  push:
+    branches: [staging-fairness-validation-20261016-1792115393]
+permissions:
+  contents: read
+jobs:
+  timed:
+    name: fairness-${{ matrix.label }}-${{ matrix.seconds }}s
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 13
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - {label: monkci-ubuntu-24.04-2, seconds: 600}
+          - {label: monkci-ubuntu-24.04-4, seconds: 300}
+          - {label: monkci-ubuntu-24.04-8, seconds: 120}
+          - {label: monkci-ubuntu-24.04-2, seconds: 30}
+          - {label: monkci-ubuntu-24.04-2, seconds: 45}
+          - {label: monkci-ubuntu-24.04-2, seconds: 60}
+    steps:
+      - name: Timed normal staging build
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "runner=$RUNNER_NAME label=${{ matrix.label }} duration=${{ matrix.seconds }}s"
+          date -u +%FT%TZ
+          sleep ${{ matrix.seconds }}
+          date -u +%FT%TZ
